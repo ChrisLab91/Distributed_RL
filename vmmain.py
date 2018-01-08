@@ -48,7 +48,7 @@ def main(_):
         #    workers.append(Worker(1, STATE_DIM, ACTION_DIM, trainer, global_episodes,
         #                          ENV_NAME, RANDOM_SEED))
 
-    with tf.Session("grpc://10.155.208.112:2222") as sess:
+    with tf.Session("grpc://10.155.209.25:2222") as sess:
         coord = tf.train.Coordinator()
         sess.run(tf.global_variables_initializer())
 
