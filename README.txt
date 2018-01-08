@@ -2,7 +2,8 @@
 
 vm setup
 
-0, python3-opengl libboost-all-dev libsdl2-dev swig python3-git
+sudo apt-get install -y python3-numpy python3-dev cmake zlib1g-dev libjpeg-dev xvfb libav-tools xorg-dev python3-opengl libboost-all-dev libsdl2-dev swig python3-git
+sudo pip3 install gym[all]
 
 sudo ufw allow 2222/tcp
 sudo ufw allow ssh
