@@ -2,6 +2,8 @@
 
 vm setup
 
+0, python3-opengl libboost-all-dev libsdl2-dev swig python3-git
+
 sudo ufw allow 2222/tcp
 sudo ufw allow ssh
 sudo ufw enable
