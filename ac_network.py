@@ -81,3 +81,5 @@ class AC_Network():
                 # Apply local gradients to global network
                 global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
                 self.apply_grads = trainer.apply_gradients(zip(grads, global_vars))
+
+		# Test commit
