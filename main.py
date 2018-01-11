@@ -41,7 +41,7 @@ def main(_):
 
     tf.reset_default_graph()
 
-    with tf.device('/job:ps/task:0/device:CPU:0'): #Parameter server adress
+    with tf.device('/job:local/task:0/device:CPU:0'): #Parameter server adress
         RANDOM_SEED = 1234
         np.random.seed(RANDOM_SEED)
         tf.set_random_seed(RANDOM_SEED)
@@ -53,36 +53,36 @@ def main(_):
 
         workers = []
         # Create worker classes
-        with tf.device('/job:worker/task:0/device:CPU:0'): #Worker server adresses
+        with tf.device('/job:local/task:1/device:CPU:0'): #Worker server adresses
             workers.append(Worker(0, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
                                   ENV_NAME, RANDOM_SEED))
-        #with tf.device('/job:worker/task:0/device:CPU:0'):
-        #    workers.append(Worker(1, STATE_DIM, ACTION_DIM, trainer, global_episodes,
-        #                          ENV_NAME, RANDOM_SEED))
+        with tf.device('/job:local/task:1/device:CPU:0'):
+            workers.append(Worker(1, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
+                                  ENV_NAME, RANDOM_SEED))
 
-    with tf.Session("grpc://10.155.209.25:2222") as sess:
+    with tf.Session("grpc://localhost:2222") as sess:
         coord = tf.train.Coordinator()
         # Prepare summary information
         merged = tf.summary.merge_all()
         train_writer = tf.summary.FileWriter(LOG_DIR, sess.graph)
-
         sess.run(tf.global_variables_initializer())
 
         # This is where the asynchronous magic happens.
         # Start the "work" process for each worker in a separate thread.
         worker_threads = []
         worker=workers[0]
-        with tf.device('/job:worker/task:0/device:CPU:0'):
+        with tf.device('/job:local/task:1/device:CPU:0'):
             worker_work = lambda: worker.work(GAMMA, sess, coord, merged, train_writer)
             t = threading.Thread(target=(worker_work))
             t.start()
         worker_threads.append(t)
-#        worker=workers[1]
-#        with tf.device('/job:worker/task:0/device:CPU:0'):
-#            worker_work = lambda: worker.work(GAMMA, sess, coord)
-#            t = threading.Thread(target=(worker_work))
-#            t.start()
-#        worker_threads.append(t)
+        worker=workers[1]
+        with tf.device('/job:local/task:1/device:CPU:0'):
+            worker_work = lambda: worker.work(GAMMA, sess, coord, merged, train_writer)
+            t = threading.Thread(target=(worker_work))
+            t.start()
+        worker_threads.append(t)
+        print("Start")
         coord.join(worker_threads)
 
 tf.app.run()

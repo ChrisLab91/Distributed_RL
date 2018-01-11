@@ -16,10 +16,10 @@ from ac_network import AC_Network
 # Size of mini batches to run training on
 MINI_BATCH = 40
 REWARD_FACTOR = 0.001
+EPISODE_RUNS = 1000
 
 # Gym environment
 ENV_NAME = 'CartPole-v0'  # Discrete (4, 2)
-
 
 # Copies one set of variables to another.
 # Used to set worker network parameters to those of global network.
@@ -47,8 +47,17 @@ def discounting(x, gamma):
 def norm(x, upper, lower=0.):
     return (x-lower)/max((upper-lower), 1e-12)
 
+# Sample new weights if noisy network
+def sample_new_weights(scopes, sess):
+    # Update variables
+    for scope_ in scopes:
+        for i in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_):
+            assign_op = i.assign(np.random.normal(size=i.get_shape()))   # i.name if you want just a name
+            sess.run(assign_op)
+
+
 class Worker():
-    def __init__(self, name, s_size, a_size, trainer, global_episodes, env_name, seed):
+    def __init__(self, name, s_size, a_size, network_config, trainer, global_episodes, env_name, seed):
         self.name = "worker_" + str(name)
         self.number = name
         self.trainer = trainer
@@ -61,16 +70,22 @@ class Worker():
         self.a_size = a_size
 
         # Create the local copy of the network and the tensorflow op to copy global parameters to local network
-        self.local_AC = AC_Network(s_size, a_size, self.name, trainer)
+        self.local_AC = AC_Network(s_size, a_size, self.name, trainer, network_config)
         self.update_local_ops = update_target_graph('global', self.name)
 
         self.env = gym.make(env_name)
         self.env.seed(seed)
 
+        # Get Noisy Net Information if applied
+        self.noisy_policy = network_config["policy_config"]["noise_dist"]
+        self.policy_layers = len(network_config["policy_config"]["layers"])
+        self.noisy_value = network_config["value_config"]["noise_dist"]
+        self.value_layers = len(network_config["value_config"]["layers"])
+
     def get_env(self):
         return self.env
 
-    def train(self, rollout, sess, gamma, r):
+    def train(self, rollout, sess, gamma, r, merged_summary):
         rollout = np.array(rollout)
         states = rollout[:, 0]
         actions = rollout[:, 1]
@@ -101,18 +116,31 @@ class Worker():
                      self.local_AC.advantages: discounted_advantages,
                      self.local_AC.state_in[0]: rnn_state[0],
                      self.local_AC.state_in[1]: rnn_state[1]}
-        v_l, p_l, e_l, g_n, v_n, _ = sess.run([self.local_AC.value_loss,
-                                               self.local_AC.policy_loss,
-                                               self.local_AC.entropy,
-                                               self.local_AC.grad_norms,
-                                               self.local_AC.var_norms,
-                                               self.local_AC.apply_grads],
-                                              feed_dict=feed_dict)
-        return v_l / len(rollout), p_l / len(rollout), e_l / len(rollout), g_n, v_n
 
-    def work(self, gamma, sess, coord):
+        summary = None
+        if self.name == "worker_0":
+            summary, v_l, p_l, e_l, g_n, v_n, _ = sess.run([merged_summary, self.local_AC.value_loss,
+                                                   self.local_AC.policy_loss,
+                                                   self.local_AC.entropy,
+                                                   self.local_AC.grad_norms,
+                                                   self.local_AC.var_norms,
+                                                   self.local_AC.apply_grads],
+                                                  feed_dict=feed_dict)
+        else:
+            v_l, p_l, e_l, g_n, v_n, _ = sess.run([self.local_AC.value_loss,
+                                                            self.local_AC.policy_loss,
+                                                            self.local_AC.entropy,
+                                                            self.local_AC.grad_norms,
+                                                            self.local_AC.var_norms,
+                                                            self.local_AC.apply_grads],
+                                                           feed_dict=feed_dict)
+
+        return v_l / len(rollout), p_l / len(rollout), e_l / len(rollout), g_n, v_n, summary
+
+    def work(self, gamma, sess, coord, merged_summary, writer_summary):
         episode_count = sess.run(self.global_episodes)
         total_steps = 0
+        train_steps = 0
         print("Starting worker " + str(self.number))
         with sess.as_default(), sess.graph.as_default():
             while not coord.should_stop():
@@ -129,6 +157,26 @@ class Worker():
                 s = self.env.reset()
 
                 rnn_state = self.local_AC.state_init
+
+                # sample new noisy parameters in fully connected layers if
+                # noisy net is used
+                if self.noisy_policy is not None:
+                    with tf.variable_scope(self.name):
+                        with tf.variable_scope("policy_net"):
+                            # Based on layers set scopes
+                            scopes = []
+                            for i in range(self.policy_layers):
+                                scopes.append("noise_action_" + str(i))
+                            sample_new_weights(scopes, sess)
+
+                if self.noisy_value is not None:
+                    with tf.variable_scope(self.name):
+                        with tf.variable_scope("value_net"):
+                            scopes = []
+                            for i in range(self.value_layers):
+                                scopes.append("noise_value_" + str(i))
+                            sample_new_weights(scopes, sess)
+
 
                 # Run an episode
                 while not terminal:
@@ -160,7 +208,13 @@ class Worker():
                                       feed_dict={self.local_AC.inputs: [s],
                                                     self.local_AC.state_in[0]: rnn_state[0],
                                                     self.local_AC.state_in[1]: rnn_state[1]})
-                        v_l, p_l, e_l, g_n, v_n = self.train(episode_mini_buffer, sess, gamma, v1[0][0])
+                        v_l, p_l, e_l, g_n, v_n, summary = self.train(episode_mini_buffer, sess, gamma, v1[0][0], merged_summary)
+                        train_steps = train_steps + 1
+
+                        # Update summary information
+                        if self.name == "worker_0":
+                            writer_summary.add_summary(summary, train_steps)
+                        # Reser episode batch
                         episode_mini_buffer = []
 
                     # Set previous state for next step
@@ -168,11 +222,22 @@ class Worker():
                     total_steps += 1
                     episode_step_count += 1
 
+
+
+                if episode_count % 20 == 0:
+                    print("Reward: " + str(episode_reward), " | Episode", episode_count, " of " + self.name)
+
                 self.episode_rewards.append(episode_reward)
                 self.episode_lengths.append(episode_step_count)
                 self.episode_mean_values.append(np.mean(episode_values))
 
-                print("Reward: " + str(episode_reward), " | Episode", episode_count)
                 sess.run(self.increment) # Next global episode
 
                 episode_count += 1
+
+                if episode_count == EPISODE_RUNS:
+                    print("Worker stops because max episode runs are reached")
+                    coord.request_stop()
+
+    def getRewards(self):
+        return self.episode_rewards
