@@ -32,7 +32,7 @@ LEARNING_RATE = 0.0005
 GAMMA = 0.99
 
 # Summary LOGDIR
-LOG_DIR = '~/A3C/MyDistTest/'
+LOG_DIR = '~/logs'
 
 #MAIN
 def main(_):
@@ -57,7 +57,7 @@ def main(_):
             workers.append(Worker(0, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
                                   ENV_NAME, RANDOM_SEED))
         with tf.device('/job:worker/task:1/device:CPU:0'):
-            workers.append(Worker(1, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
+            workers.append(Worker(1, STATE_DIM, ACTION_DIM, trainer, global_episodes,
                                   ENV_NAME, RANDOM_SEED))
 
     with tf.Session("grpc://10.155.209.25:2222") as sess:
@@ -65,6 +65,7 @@ def main(_):
         # Prepare summary information
         merged = tf.summary.merge_all()
         train_writer = tf.summary.FileWriter(LOG_DIR, sess.graph)
+
         sess.run(tf.global_variables_initializer())
 
         # This is where the asynchronous magic happens.
@@ -78,11 +79,10 @@ def main(_):
         worker_threads.append(t)
         worker=workers[1]
         with tf.device('/job:local/task:1/device:CPU:0'):
-            worker_work = lambda: worker.work(GAMMA, sess, coord, merged, train_writer)
+            worker_work = lambda: worker.work(GAMMA, sess, coord)
             t = threading.Thread(target=(worker_work))
             t.start()
         worker_threads.append(t)
-        print("Start")
         coord.join(worker_threads)
 
 tf.app.run()
