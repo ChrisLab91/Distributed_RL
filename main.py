@@ -32,7 +32,7 @@ LEARNING_RATE = 0.0005
 GAMMA = 0.99
 
 # Summary LOGDIR
-LOG_DIR = '/home/adrian/Schreibtisch/Uni/Data-Innovation-Lab/DILAB/tensorflowlogs'
+LOG_DIR = '~/A3C/MyDistTest/'
 
 #MAIN
 def main(_):
