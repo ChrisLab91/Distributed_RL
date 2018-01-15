@@ -50,14 +50,11 @@ def main(_):
         trainer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
         master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', None, network_config)  # Generate global network
         num_workers = 2  # Number of workers
-
         workers = []
         # Create worker classes
-        with tf.device('/job:local/task:1/device:CPU:0'): #Worker server adresses
-            workers.append(Worker(0, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
-                                  ENV_NAME, RANDOM_SEED))
-        with tf.device('/job:local/task:1/device:CPU:0'):
-            workers.append(Worker(1, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
+        for i in range(num_workers):
+            with tf.device('/job:local/task:%d/device:CPU:0' % i): #Worker server adresses
+                workers.append(Worker(i, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
                                   ENV_NAME, RANDOM_SEED))
 
     with tf.Session("grpc://localhost:2222") as sess:
@@ -70,18 +67,12 @@ def main(_):
         # This is where the asynchronous magic happens.
         # Start the "work" process for each worker in a separate thread.
         worker_threads = []
-        worker=workers[0]
-        with tf.device('/job:local/task:1/device:CPU:0'):
-            worker_work = lambda: worker.work(GAMMA, sess, coord, merged, train_writer)
-            t = threading.Thread(target=(worker_work))
-            t.start()
-        worker_threads.append(t)
-        worker=workers[1]
-        with tf.device('/job:local/task:1/device:CPU:0'):
-            worker_work = lambda: worker.work(GAMMA, sess, coord, merged, train_writer)
-            t = threading.Thread(target=(worker_work))
-            t.start()
-        worker_threads.append(t)
+        for worker in workers:
+            with tf.device('/job:local/task:%d/device:CPU:0' % i):
+                worker_work = lambda: worker.work(GAMMA, sess, coord, merged, train_writer)
+                t = threading.Thread(target=(worker_work))
+                t.start()
+            worker_threads.append(t)
         print("Start")
         coord.join(worker_threads)
 
