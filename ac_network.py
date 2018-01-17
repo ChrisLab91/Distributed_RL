@@ -210,7 +210,7 @@ class AC_Network():
 
                 # Compute first part of loss function
                 values_first = self.value[:(length_episode - self.rollout + 1)]
-                values_last = self.value[:(length_episode - self.rollout + 1)]
+                values_last = self.value[-(length_episode - self.rollout + 1):]
 
                 with tf.variable_scope("value_loss"):
                     self.value_loss = -1 * values_first + self.discount[self.rollout - 1] * values_last

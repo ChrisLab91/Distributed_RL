@@ -377,7 +377,7 @@ class Worker():
                 if episode_count % 20 == 0:
                     print("Reward: " + str(episode_reward), " | Episode", episode_count, " of " + self.name)
                     if self.method == "PCL":
-                        print("Reward Online: " + str(episode_reward_online), " | Episode", episode_count, " of " + self.name)
+                        print("Reward Offline: " + str(episode_reward_online), " | Episode", episode_count, " of " + self.name)
 
                 self.episode_rewards.append(episode_reward)
                 self.episode_lengths.append(episode_step_count)
