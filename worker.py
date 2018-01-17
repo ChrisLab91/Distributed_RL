@@ -53,10 +53,11 @@ def sample_new_weights(scopes, sess):
     # Update variables
     #print(scopes)
     for scope_ in scopes:
-       # print(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_))
+        #print(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_))
+        assig_ops = []
         for i in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_):
-            assign_op = i.assign(np.random.normal(size=i.get_shape()))   # i.name if you want just a name
-            sess.run(assign_op)
+            assig_ops.append(i.assign(np.random.normal(size=i.get_shape())))  # i.name if you want just a name
+        sess.run(assig_ops)
 
 # Unpack a given episode that is saved into a dict
 def unpack_episode(episode):
@@ -198,7 +199,7 @@ class Worker():
 
                 # sample new noisy parameters in fully connected layers if
                 # noisy net is used
-                if episode_count % 5 == 0:
+                if episode_count % 15 == 0:
                     if self.noisy_policy is not None:
                         with tf.variable_scope(self.name):
                             with tf.variable_scope("policy_net"):

@@ -35,7 +35,7 @@ GAMMA = 0.99
 LOG_DIR = '~/A3C/MyDistTest/'
 
 # Choose RL method (A3C, PCL)
-METHOD = "PCL"
+METHOD = "A3C"
 print("Run method: " + METHOD)
 
 # PCL variables
