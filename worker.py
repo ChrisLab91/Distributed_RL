@@ -63,10 +63,11 @@ def unpack_episode(episode):
     a_ep = episode["actions"]
     s_ep = episode["states"]
     r_ep = episode["rewards"]
+    v_ep = episode["values"]
     ag_info_ep = episode["agent_infos"]
     enf_info_ep = episode["env_infos"]
 
-    return a_ep, s_ep, r_ep, ag_info_ep, enf_info_ep
+    return a_ep, s_ep, r_ep, v_ep, ag_info_ep, enf_info_ep
 
 
 class Worker():
@@ -215,14 +216,14 @@ class Worker():
                                     scopes.append(self.name + "/value_net/" + "noise_value_" + str(i) + "/")
                                 sample_new_weights(scopes, sess)
 
-
                 if self.method == "PCL":
                     # Perform a rollout of the chosen environment
                     episodes = self.rolloutPCL(sess, s, rnn_state, episode_count = 1)
 
                     # Add sampled episode to replay buffer
                     self.replay_buffer.add(episodes)
-                    _, _, r_ep, _, _ = unpack_episode(episodes[0])
+                    _, _, r_ep, v_ep,_, _ = unpack_episode(episodes[0])
+                    episode_values = v_ep
                     episode_reward = np.sum(r_ep)
 
                     # Train on online episode if applicable
@@ -233,7 +234,7 @@ class Worker():
                         # Train PCL on current episode
 
                         # Get action, states, rollout length and reward information
-                        a_ep, s_ep, r_ep, _, _ = unpack_episode(episodes[0])
+                        a_ep, s_ep, r_ep, _,  _, _ = unpack_episode(episodes[0])
                         episodes_len = len(a_ep)
 
                         # Get action array
@@ -267,7 +268,8 @@ class Worker():
                         sampled_episodes = self.replay_buffer.sample(episode_count = 1)
 
                         # Train on sampled episodes
-                        a_ep, s_ep, r_ep, _, _ = unpack_episode(sampled_episodes[0])
+
+                        a_ep, s_ep, r_ep, _,  _, _ = unpack_episode(sampled_episodes[0])
                         episodes_len = len(a_ep)
 
                         # Get action array
@@ -300,7 +302,6 @@ class Worker():
                                 self.local_AC.state_in[0]: rnn_state[0],
                                 self.local_AC.state_in[1]: rnn_state[1]
                             }
-
                             summary, v_l, p_l, total_loss , _ = sess.run([merged_summary,self.local_AC.value_loss,
                                                              self.local_AC.policy_loss,
                                                              self.local_AC.loss,
@@ -416,6 +417,7 @@ class Worker():
             rewards = []
             agent_infos = []
             env_infos = []
+            values = []
             s = initial_state
             path_length = 0
 
@@ -425,6 +427,7 @@ class Worker():
                 next_s, r, d, env_info = self.env.step(np.argmax(a))
                 states.append(s)
                 rewards.append(r)
+                values.append(v)
                 actions.append(np.argmax(a))
                 agent_infos.append(agent_info)
                 env_infos.append(env_info)
@@ -433,12 +436,14 @@ class Worker():
                     break
                 s = next_s
             # Append sampled episode
+            # action_array = np.eye(self.a_size, dtype=np.int32)[np.array(actions)]
             episodes.append(dict(
                                 states=np.array(states),
                                 actions=np.array(actions),
                                 rewards=np.array(rewards),
+                                values = np.reshape(np.array(values), newshape= (len(np.array(values)))),
                                 agent_infos=np.array(agent_infos),
-                                env_infos=np.array(env_infos),
+                                env_infos=np.array(env_infos)
                             ))
         return episodes
 
