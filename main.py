@@ -34,6 +34,14 @@ GAMMA = 0.99
 # Summary LOGDIR
 LOG_DIR = '~/A3C/MyDistTest/'
 
+# Choose RL method (A3C, PCL)
+METHOD = "A3C"
+print("Run method: " + METHOD)
+
+# PCL variables
+TAU = 0.2
+ROLLOUT = 10
+
 #MAIN
 def main(_):
     global master_network
@@ -48,14 +56,14 @@ def main(_):
 
         global_episodes = tf.Variable(0, dtype=tf.int32, name='global_episodes', trainable=False)
         trainer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
-        master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', None, network_config)  # Generate global network
+        master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', None, network_config, tau = TAU, rollout = ROLLOUT, method = METHOD)  # Generate global network
         num_workers = 2  # Number of workers
         workers = []
         # Create worker classes
         for i in range(num_workers):
             with tf.device('/job:local/task:%d/device:CPU:0' % i): #Worker server adresses
                 workers.append(Worker(i, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
-                                  ENV_NAME, RANDOM_SEED))
+                                  ENV_NAME, RANDOM_SEED, TAU, ROLLOUT, METHOD))
 
     with tf.Session("grpc://localhost:2222") as sess:
         coord = tf.train.Coordinator()

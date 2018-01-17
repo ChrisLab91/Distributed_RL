@@ -22,13 +22,17 @@ def normalized_columns_initializer(std=1.0):
 
 
 class AC_Network():
-    def __init__(self, s_size, a_size, scope, trainer, network_config):
+    def __init__(self, s_size, a_size, scope, trainer, network_config, tau = 0.0, rollout = 10, method = "A3C"):
 
         # Read network configurations
         self.shared = network_config["shared"]
         self.shared_config = network_config["shared_config"]
         self.policy_config = network_config["policy_config"]
         self.value_config = network_config["value_config"]
+
+        # Paramters required by PCL
+        self.tau_pcl = tau
+        self.rollout_pcl = rollout
 
         with tf.variable_scope(scope):
 
@@ -46,7 +50,8 @@ class AC_Network():
 
             # Only the worker network need ops for loss functions and gradient updating.
             if scope != 'global':
-                self.setup_loss_gradients_summary(scope, trainer, a_size)
+                self.setup_loss_gradients_summary(scope, trainer, a_size, method)
+
 
     def build_shared_network(self, add_summaries=False):
 
@@ -73,6 +78,7 @@ class AC_Network():
             h_in = tf.placeholder(tf.float32, [1, lstm_cell.state_size.h])
             self.state_in = [c_in, h_in]
             rnn_in = tf.expand_dims(self.inputs, [0])
+            #rnn_in = self.inputs
             state_in = tf.contrib.rnn.LSTMStateTuple(c_in, h_in)
             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
                 lstm_cell, rnn_in,
@@ -152,38 +158,85 @@ class AC_Network():
 
     # Function defining the tensorflow graph of the loss functions
     # and the global and worker gradients
-    def setup_loss_gradients_summary(self, scope, trainer, a_size):
+    def setup_loss_gradients_summary(self, scope, trainer, a_size, method = "A3C"):
 
-        self.actions = tf.placeholder(shape=[None, a_size], dtype=tf.float32)
-        self.target_v = tf.placeholder(shape=[None], dtype=tf.float32)
-        self.advantages = tf.placeholder(shape=[None], dtype=tf.float32)
 
-        self.responsible_outputs = tf.reduce_sum(self.policy * self.actions, [1])
+        if method == "A3C":
+            with tf.variable_scope("loss"):
+                self.actions = tf.placeholder(shape=[None, a_size], dtype=tf.float32)
+                self.target_v = tf.placeholder(shape=[None], dtype=tf.float32)
+                self.advantages = tf.placeholder(shape=[None], dtype=tf.float32)
 
-        # Value loss function
-        self.value_loss = 0.5 * tf.reduce_sum(tf.square(self.target_v - tf.reshape(self.value, [-1])))
+                self.responsible_outputs = tf.reduce_sum(self.policy * self.actions, [1])
 
-        # Softmax policy loss function
-        self.policy_loss = -tf.reduce_sum(tf.log(tf.maximum(self.responsible_outputs, 1e-12)) * self.advantages)
+                with tf.variable_scope("value_loss"):
+                    # Value loss function
+                    self.value_loss = 0.5 * tf.reduce_sum(tf.square(self.target_v - tf.reshape(self.value, [-1])))
 
-        # Softmax entropy function
-        self.entropy = - tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
+                with tf.variable_scope("policy_loss"):
+                    # Softmax policy loss function
+                    self.policy_loss = -tf.reduce_sum(tf.log(tf.maximum(self.responsible_outputs, 1e-12)) * self.advantages)
 
-        # If noisy net is active one can disable entropy regularization
-        if ENTROPY_REGULARIZATION:
-            self.loss = 0.5 * self.value_loss + self.policy_loss - self.entropy * ENTROPY_REGULARIZATION_LAMBDA
-        else:
-            self.loss = 0.5 * self.value_loss + self.policy_loss
+                # Softmax entropy function
+                with tf.variable_scope("entropy"):
+                    self.entropy = - tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
 
-        if scope == "worker_0":
-            tf.summary.scalar('policy_loss_' + scope,
-                              self.policy_loss)
-            tf.summary.scalar('value_loss_' + scope,
-                              self.value_loss)
-            tf.summary.scalar('loss_' + scope,
-                              self.loss)
-            tf.summary.scalar('advantages_' + scope,
-                              tf.reduce_mean(self.advantages))
+                # If noisy net is active one can disable entropy regularization
+                if ENTROPY_REGULARIZATION:
+                    self.loss = 0.5 * self.value_loss + self.policy_loss - self.entropy * ENTROPY_REGULARIZATION_LAMBDA
+                else:
+                    self.loss = 0.5 * self.value_loss + self.policy_loss
+
+            if scope == "worker_0":
+                tf.summary.scalar('policy_loss_' + scope,
+                                  self.policy_loss)
+                tf.summary.scalar('value_loss_' + scope,
+                                  self.value_loss)
+                tf.summary.scalar('loss_' + scope,
+                                  self.loss)
+                tf.summary.scalar('advantages_' + scope,
+                                  tf.reduce_mean(self.advantages))
+
+        elif method == "PCL":
+
+            with tf.variable_scope("loss"):
+                self.actions = tf.placeholder(shape=[None, a_size], dtype=tf.float32)
+                self.rewards = tf.placeholder(shape=[None], dtype=tf.float32)
+                self.discount = tf.placeholder(shape=[None], dtype=tf.float32)
+                self.rollout = tf.placeholder(tf.int32, shape=())
+
+                # Get first and last values of episode sub-batches
+                length_episode = tf.shape(self.value)[0]
+
+                # Compute first part of loss function
+                values_first = self.value[:(length_episode - self.rollout + 1)]
+                values_last = self.value[:(length_episode - self.rollout + 1)]
+
+                with tf.variable_scope("value_loss"):
+                    self.value_loss = -1 * values_first + self.discount[self.rollout - 1] * values_last
+
+                # Compute second part of loss function
+                # Get log probs
+                with tf.variable_scope("policy_loss"):
+                    self.log_probs = tf.log(tf.reduce_sum(self.policy * self.actions, axis=1))
+                    rolling_log_probs = tf.map_fn(lambda i: self.log_probs[i:(i + self.rollout - 1)],
+                                                  tf.range(length_episode - self.rollout + 1), dtype=tf.float32)
+                    rolling_rewards = tf.map_fn(lambda i: self.rewards[i:(i + self.rollout - 1)],
+                                                tf.range(length_episode - self.rollout + 1),dtype=tf.float32)
+                    self.policy_loss = tf.reduce_sum((rolling_rewards - self.tau_pcl * rolling_log_probs) * self.discount[:(self.rollout-1)], axis=1)
+
+                # Combine both loss parts
+                self.loss = tf.reduce_mean(0.5 * tf.square(self.value_loss + self.policy_loss))
+
+            if scope == "worker_0":
+                tf.summary.scalar('policy_loss_' + scope,
+                                  tf.reduce_mean(self.policy_loss))
+                tf.summary.scalar('value_loss_' + scope,
+                                  tf.reduce_mean(self.value_loss))
+                tf.summary.histogram('log_probs' + scope,
+                                     self.log_probs)
+                tf.summary.scalar('loss_' + scope,
+                                  self.loss)
 
         # Get gradients from local network using local losses
         local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
