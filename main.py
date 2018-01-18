@@ -35,7 +35,7 @@ GAMMA = 0.99
 LOG_DIR = '~/A3C/MyDistTest/'
 
 # Choose RL method (A3C, PCL)
-METHOD = "A3C"
+METHOD = "PCL"
 print("Run method: " + METHOD)
 
 # PCL variables
@@ -61,7 +61,7 @@ def main(_):
         workers = []
         # Create worker classes
         for i in range(num_workers):
-            with tf.device('/job:local/task:%d/device:CPU:0' % i): #Worker server adresses
+            with tf.device('/job:local/task:%d/device:CPU:0' % (i+1)): #Worker server adresses
                 workers.append(Worker(i, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
                                   ENV_NAME, RANDOM_SEED, TAU, ROLLOUT, METHOD))
 
@@ -76,7 +76,7 @@ def main(_):
         # Start the "work" process for each worker in a separate thread.
         worker_threads = []
         for worker in workers:
-            with tf.device('/job:local/task:%d/device:CPU:0' % i):
+            with tf.device('/job:local/task:%d/device:CPU:0' % (worker.number+1)):
                 worker_work = lambda: worker.work(GAMMA, sess, coord, merged, train_writer)
                 t = threading.Thread(target=(worker_work))
                 t.start()
