@@ -9,9 +9,9 @@ import time
 FLAGS = None
 
 def main(_):
-  print(FLAGS.workers)
+  print(FLAGS.servers)
   ps_hosts=[]
-  for i in range (2222, 2222+FLAGS.workers):
+  for i in range (2222, 2222+FLAGS.servers):
       ps_hosts.append('localhost:%d' % i)
   # Create a cluster from the parameter server and worker hosts.
   cluster = tf.train.ClusterSpec({"local": ps_hosts})
