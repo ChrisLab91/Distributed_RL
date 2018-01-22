@@ -64,7 +64,7 @@ def main(_):
         for i in range(num_workers):
             with tf.device('/job:worker/task:%d/device:CPU:0' % i): #Worker server adresses
                 workers.append(Worker(i, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
-                                  ENV_NAME, RANDOM_SEED, TAU, ROLLOUT, METHOD))
+                                  ENV_NAME, tau = TAU, rollout= ROLLOUT, method=METHOD))
 
     with tf.Session("grpc://10.155.209.25:2222") as sess:
         coord = tf.train.Coordinator()

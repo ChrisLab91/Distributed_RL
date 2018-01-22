@@ -57,13 +57,13 @@ def main(_):
         global_episodes = tf.Variable(0, dtype=tf.int32, name='global_episodes', trainable=False)
         trainer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
         master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', None, network_config, tau = TAU, rollout = ROLLOUT, method = METHOD)  # Generate global network
-        num_workers = 16  # Number of workers
+        num_workers = 2  # Number of workers
         workers = []
         # Create worker classes
         for i in range(num_workers):
             with tf.device('/job:local/task:%d/device:CPU:0' % (i+1)): #Worker server adresses
                 workers.append(Worker(i, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
-                                  ENV_NAME, RANDOM_SEED, TAU, ROLLOUT, METHOD))
+                                  ENV_NAME, tau = TAU, rollout= ROLLOUT, method=METHOD))
 
     with tf.Session("grpc://localhost:2222") as sess:
         coord = tf.train.Coordinator()

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-numservers=16
+numservers=3
 for i in `seq 0 $((numservers-1))`;
 do
-python3 server.py \
+python server.py \
      --servers=$numservers \
      --task_index=$i &
-sleep 5s
+sleep 2s
 done

@@ -36,8 +36,8 @@ class AC_Network():
 
         with tf.variable_scope(scope):
 
-            # Input
-            self.inputs = tf.placeholder(shape=[None, s_size], dtype=tf.float32)
+            # Input --> Shape [batch_size, time_length, feature_size]
+            self.inputs = tf.placeholder(shape=[None, None, s_size], dtype=tf.float32)
 
             # Shared Recurrent network for temporal dependencies
             shared_output = self.build_shared_network(add_summaries=False)
@@ -68,30 +68,41 @@ class AC_Network():
 
         if shared_network_kind == "RNN":
 
-            cell_units = self.shared_config["Cell_Units"]
+            def length(sequence):
+                used = tf.sign(tf.reduce_max(tf.abs(sequence), 2))
+                length = tf.reduce_sum(used, 1)
+                length = tf.cast(length, tf.int32)
+                return length
+
+            self.lengths_episodes = length(self.inputs)
+
+            self.cell_units = self.shared_config["Cell_Units"]
             # Recurrent network for temporal dependencies
-            lstm_cell = tf.contrib.rnn.BasicLSTMCell(cell_units, state_is_tuple=True)
-            c_init = np.zeros((1, lstm_cell.state_size.c), np.float32)
-            h_init = np.zeros((1, lstm_cell.state_size.h), np.float32)
-            self.state_init = [c_init, h_init]
-            c_in = tf.placeholder(tf.float32, [1, lstm_cell.state_size.c])
-            h_in = tf.placeholder(tf.float32, [1, lstm_cell.state_size.h])
+            lstm_cell = tf.contrib.rnn.BasicLSTMCell(self.cell_units, state_is_tuple=True)
+            #c_init = np.zeros((1, lstm_cell.state_size.c), np.float32)
+            #h_init = np.zeros((1, lstm_cell.state_size.h), np.float32)
+            #self.state_init = [c_init, h_init]
+            c_in = tf.placeholder(tf.float32, [None, lstm_cell.state_size.c])
+            h_in = tf.placeholder(tf.float32, [None, lstm_cell.state_size.h])
             self.state_in = [c_in, h_in]
-            rnn_in = tf.expand_dims(self.inputs, [0])
-            #rnn_in = self.inputs
+            #rnn_in = tf.expand_dims(self.inputs, [0])
+            rnn_in = self.inputs
             state_in = tf.contrib.rnn.LSTMStateTuple(c_in, h_in)
             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
                 lstm_cell, rnn_in,
                 initial_state=state_in,
-                time_major=False)
-            lstm_c, lstm_h = lstm_state
-            self.state_out = (lstm_c[:1, :], lstm_h[:1, :])
-            rnn_out = tf.reshape(lstm_outputs, [-1, cell_units])
+                time_major=False,
+                sequence_length=length(self.inputs))
+            #lstm_c, lstm_h = lstm_state
+            #self.state_out = (lstm_c[:1, :], lstm_h[:1, :])
+            self.state_out = lstm_state
+            #rnn_out = tf.reshape(lstm_outputs, [-1, cell_units])
+            self.rnn_out = lstm_outputs
 
         else:
-            rnn_out = None
+            self.rnn_out = None
 
-        return rnn_out
+        return self.rnn_out
 
     # Function to create and specify the value-function head of the shared
     # Actor-Critic Model
@@ -113,12 +124,12 @@ class AC_Network():
                                                  biases_initializer=None)
 
             else:
-                value = noisy_dense(inputs_shared, layers[0],
+                value = self.noisy_dense(inputs_shared, layers[0],
                                     name="noise_value_" + str(0),
                                     bias=True, activation_fn=tf.identity,
                                     noise_dist=noise_dist)
                 for units, i in zip(layers[1:], range(len(layers[1:]))):
-                    value = noisy_dense(value, units,
+                    value = self.noisy_dense(value, units,
                                         name="noise_value_" + str(i + 1),
                                         bias=True, activation_fn=tf.identity,
                                         noise_dist=noise_dist)
@@ -144,12 +155,12 @@ class AC_Network():
                                                   weights_initializer=normalized_columns_initializer(0.01),
                                                   biases_initializer=None)
             else:
-                policy = noisy_dense(inputs_shared, layers[0],
+                policy = self.noisy_dense(inputs_shared, layers[0],
                                      name="noise_action_" + str(0),
                                      bias=True, activation_fn=tf.nn.softmax,
                                      noise_dist=noise_dist)
                 for units, i in zip(layers[1:], range(len(layers[1:]))):
-                    policy = noisy_dense(policy, units,
+                    policy = self.noisy_dense(policy, units,
                                          name="noise_action_" + str(i + 1),
                                          bias=True, activation_fn=tf.nn.softmax,
                                          noise_dist=noise_dist)
@@ -163,29 +174,82 @@ class AC_Network():
 
         if method == "A3C":
             with tf.variable_scope("loss"):
-                self.actions = tf.placeholder(shape=[None, a_size], dtype=tf.float32)
-                self.target_v = tf.placeholder(shape=[None], dtype=tf.float32)
-                self.advantages = tf.placeholder(shape=[None], dtype=tf.float32)
+                self.actions = tf.placeholder(shape=[None, None, a_size], dtype=tf.float32)
+                self.target_v = tf.placeholder(shape=[None, None], dtype=tf.float32)
+                self.advantages = tf.placeholder(shape=[None, None], dtype=tf.float32)
 
-                self.responsible_outputs = tf.reduce_sum(self.policy * self.actions, [1])
+                # Get first and last values of episode sub-batches
+                length_episode = tf.shape(self.value)[1]
+                length_batch = tf.shape(self.value)[0]
 
                 with tf.variable_scope("value_loss"):
-                    # Value loss function
-                    self.value_loss = 0.5 * tf.reduce_sum(tf.square(self.target_v - tf.reshape(self.value, [-1])))
 
+                    # Tensorarray to keep value loss for all episodes
+                    value_loss_array_init = tf.TensorArray(tf.float32, size=length_batch, clear_after_read=False)
+                    # Function to compute the value loss for all episodes
+                    def compute_value_loss(i, ta):
+                        value_loss_temp = 0.5 * tf.reduce_sum(
+                            tf.square(self.target_v[i][:self.lengths_episodes[i]] - self.value[i][:self.lengths_episodes[i]]))
+                        return i + 1, ta.write(i, value_loss_temp)
+
+                    # Loop over all episodes
+                    _, value_loss_array = tf.while_loop(
+                        lambda i, ta: i < length_batch, compute_value_loss, [0, value_loss_array_init])
+
+                    # Value loss function
+                    self.value_loss = tf.reduce_mean(tf.map_fn(lambda i: value_loss_array.gather([i]),
+                                                                tf.range(length_batch),
+                                                                dtype=tf.float32))
                 with tf.variable_scope("policy_loss"):
-                    # Softmax policy loss function
-                    self.policy_loss = -tf.reduce_sum(tf.log(tf.maximum(self.responsible_outputs, 1e-12)) * self.advantages)
+
+                    # Tensorarray to keep value loss for all episodes
+                    policy_loss_array_init = tf.TensorArray(tf.float32, size=length_batch, clear_after_read=False)
+
+                    # Function to compute the value loss for all episodes
+                    def compute_policy_loss(i, ta):
+                        responsible_outputs_temp = tf.reduce_sum(self.policy[i][:self.lengths_episodes[i]] * self.actions[i][:self.lengths_episodes[i]], [1])
+                        policy_loss_temp = -tf.reduce_sum(tf.log(tf.maximum(responsible_outputs_temp, 1e-12)) * self.advantages[i][:self.lengths_episodes[i]])
+                        return i+1, ta.write(i, policy_loss_temp)
+
+                     # Loop over all episodes
+                    _, policy_loss_array = tf.while_loop(
+                            lambda i, ta: i < length_batch, compute_policy_loss, [0, policy_loss_array_init])
+
+                    self.policy_loss = tf.reduce_mean(tf.map_fn(lambda i: policy_loss_array.gather([i]),
+                                                                tf.range(length_batch),
+                                                                dtype = tf.float32))
 
                 # Softmax entropy function
                 with tf.variable_scope("entropy"):
-                    self.entropy = - tf.reduce_sum(self.policy * tf.log(tf.maximum(self.policy, 1e-12)))
+
+                    # Tensorarray to keep entropy for all episodes
+                    entropy_array_init = tf.TensorArray(tf.float32, size= length_batch, clear_after_read=False)
+
+                    # Compute entropy
+                    def compute_entropy(i, ta):
+                        entropy_temp = tf.reduce_sum(self.policy[i][:self.lengths_episodes[i]] * tf.log(tf.maximum(self.policy[i][:self.lengths_episodes[i]], 1e-12)))
+                        return i + 1, ta.write(i, entropy_temp)
+
+                    _, entropy_array = tf.while_loop(
+                            lambda i, ta: i < length_batch, compute_entropy, [0, entropy_array_init])
+
+                    self.entropy = tf.reduce_mean(tf.map_fn(lambda i: entropy_array.gather([i]),
+                                                                tf.range(length_batch),
+                                                                dtype = tf.float32))
 
                 # If noisy net is active one can disable entropy regularization
                 if ENTROPY_REGULARIZATION:
-                    self.loss = 0.5 * self.value_loss + self.policy_loss - self.entropy * ENTROPY_REGULARIZATION_LAMBDA
+                    loss_map = tf.map_fn(lambda i: 0.5 * value_loss_array.gather([i]) + policy_loss_array.gather([i]) - entropy_array.gather([i]) * ENTROPY_REGULARIZATION_LAMBDA,
+                                          tf.range(length_batch),
+                                          dtype = tf.float32)
                 else:
-                    self.loss = 0.5 * self.value_loss + self.policy_loss
+                    loss_map = tf.map_fn(lambda i: 0.5 * value_loss_array.gather([i]) + policy_loss_array.gather([i]),
+                                          tf.range(length_batch),
+                                          dtype = tf.float32)
+
+                self.loss = tf.reduce_mean(loss_map)
+
+
 
             if scope == "worker_0":
                 tf.summary.scalar('policy_loss_' + scope,
@@ -194,47 +258,102 @@ class AC_Network():
                                   self.value_loss)
                 tf.summary.scalar('loss_' + scope,
                                   self.loss)
-                tf.summary.scalar('advantages_' + scope,
-                                  tf.reduce_mean(self.advantages))
+                #tf.summary.scalar('advantages_' + scope,
+                #                  tf.reduce_mean(self.advantages))
 
         elif method == "PCL":
 
             with tf.variable_scope("loss"):
-                self.actions = tf.placeholder(shape=[None, a_size], dtype=tf.float32)
-                self.rewards = tf.placeholder(shape=[None], dtype=tf.float32)
+                self.actions = tf.placeholder(shape=[None, None, a_size], dtype=tf.float32)
+                self.rewards = tf.placeholder(shape=[None, None], dtype=tf.float32)
                 self.discount = tf.placeholder(shape=[None], dtype=tf.float32)
                 self.rollout = tf.placeholder(tf.int32, shape=())
 
                 # Get first and last values of episode sub-batches
-                length_episode = tf.shape(self.value)[0]
+                length_episode = tf.shape(self.value)[1]
+                length_batch = tf.shape(self.value)[0]
 
-                # Compute first part of loss function
-                values_first = self.value[:(length_episode - self.rollout + 1)]
-                values_last = self.value[-(length_episode - self.rollout + 1):]
-
+                # Compute first part of loss function --> Value loss
                 with tf.variable_scope("value_loss"):
-                    self.value_loss = -1 * values_first + self.discount[self.rollout - 1] * values_last
 
-                # Compute second part of loss function
-                # Get log probs
+                    # value_loss_array holds for every episode -value_first + gamma ** rollout * value_last
+                    value_loss_array_init = tf.TensorArray(tf.float32, size=length_batch)
+                    # Tensorarray to hold mean of value loss per episodes rollouts
+                    value_loss_array_mean_init = tf.TensorArray(tf.float32, size=length_batch)
+
+                    def compute_value_loss(i, ta, ta_mean):
+                        value_loss = -1 * self.value[i][:(self.lengths_episodes[i] - self.rollout + 1)] + self.discount[self.rollout - 1] * self.value[i][-(self.lengths_episodes[i] + (length_episode - self.lengths_episodes[i]) - self.rollout + 1):self.lengths_episodes[i]]
+                        value_loss_mean = tf.reduce_mean(value_loss)
+                        return i + 1, ta.write(i, value_loss), ta_mean.write(i, value_loss_mean)
+
+                    # Loop over all episodes
+                    _, value_loss_array, value_loss_mean_array = tf.while_loop(
+                        lambda i, ta, ta_mean: i < length_batch, compute_value_loss, [0, value_loss_array_init, value_loss_array_mean_init])
+
+                # Compute second part of loss function --> Policy loss
                 with tf.variable_scope("policy_loss"):
-                    self.log_probs = tf.log(tf.reduce_sum(self.policy * self.actions, axis=1))
-                    rolling_log_probs = tf.map_fn(lambda i: self.log_probs[i:(i + self.rollout - 1)],
-                                                  tf.range(length_episode - self.rollout + 1), dtype=tf.float32)
-                    rolling_rewards = tf.map_fn(lambda i: self.rewards[i:(i + self.rollout - 1)],
-                                                tf.range(length_episode - self.rollout + 1),dtype=tf.float32)
-                    self.policy_loss = tf.reduce_sum((rolling_rewards - self.tau_pcl * rolling_log_probs) * self.discount[:(self.rollout-1)], axis=1)
+
+                    # Compute based on episode lengths relevant log probs
+                    policy_loss_array_init = tf.TensorArray(tf.float32, size=length_batch)
+                    # Tensorarray to hold mean of policy loss per episodes rollouts
+                    policy_loss_mean_array_init = tf.TensorArray(tf.float32, size=length_batch)
+
+                    def compute_policy_loss(i, ta, ta_mean):
+                        # Compute log probs
+                        log_probs = tf.log(
+                            tf.reduce_sum(self.actions[i][:self.lengths_episodes[i]] * self.policy[i][:self.lengths_episodes[i]], axis=1) + 0.0001)
+                        # Compute rolling log_probs
+                        rolling_log_probs = tf.map_fn(lambda j: log_probs[j:(j + self.rollout - 1)],
+                                                      tf.range(self.lengths_episodes[i] - self.rollout + 1), dtype=tf.float32)
+                        # Compute rolling rewards
+                        rolling_rewards = tf.map_fn(lambda j: self.rewards[i][j:(j + self.rollout - 1)],
+                                                    tf.range(self.lengths_episodes[i] - self.rollout + 1), dtype=tf.float32)
+
+                        # Compute policy loss
+                        policy_loss = tf.reduce_sum((rolling_rewards - self.tau_pcl *
+                                                     rolling_log_probs) * self.discount[:(self.rollout - 1)], axis=1)
+
+                        # Compute mean of policy loss per episode
+                        policy_loss_mean = tf.reduce_mean(policy_loss)
+
+                        return i + 1, ta.write(i, policy_loss), ta_mean.write(i, policy_loss_mean)
+
+                    # Loop over all episodes
+                    _, policy_loss_array, policy_loss_array_mean = tf.while_loop(
+                        lambda i, ta, ta_mean: i < length_batch, compute_policy_loss, [0, policy_loss_array_init, policy_loss_mean_array_init])
+
 
                 # Combine both loss parts
-                self.loss = tf.reduce_mean(0.5 * tf.square(self.value_loss + self.policy_loss))
+                tf_loss_map = tf.map_fn(lambda i: tf.reduce_mean(
+                                                    0.5 * tf.square(value_loss_array.gather([i]) + policy_loss_array.gather([i]))),
+                                        tf.range(length_batch), dtype=tf.float32)
+
+                # Total loss via weighted sum depending on the length of the different episodes
+                self.loss = tf.reduce_mean(tf_loss_map * tf.cast(self.lengths_episodes, dtype=tf.float32)) / tf.cast(
+                    tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
+
+                # Mean value of value loss
+                self.value_loss = tf.reduce_sum(tf.map_fn(lambda i: value_loss_mean_array.gather([i]),
+                                                          tf.range(length_batch),
+                                                          dtype=tf.float32) * tf.cast(self.lengths_episodes,
+                                                                                      dtype=tf.float32)) / tf.cast(
+                    tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
+
+                # Mean value of policy loss
+                self.policy_loss = tf.reduce_sum(tf.map_fn(lambda i: policy_loss_array_mean.gather([i]),
+                                                           tf.range(length_batch),
+                                                           dtype=tf.float32) * tf.cast(self.lengths_episodes,
+                                                                                       dtype=tf.float32)) / tf.cast(
+                    tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
 
             if scope == "worker_0":
+
                 tf.summary.scalar('policy_loss_' + scope,
-                                  tf.reduce_mean(self.policy_loss))
+                                  self.policy_loss)
                 tf.summary.scalar('value_loss_' + scope,
-                                  tf.reduce_mean(self.value_loss))
-                tf.summary.histogram('log_probs' + scope,
-                                     self.log_probs)
+                                  self.value_loss)
+                #tf.summary.histogram('log_probs' + scope,
+                #                     self.log_probs)
                 tf.summary.scalar('loss_' + scope,
                                   self.loss)
 
@@ -249,66 +368,77 @@ class AC_Network():
         self.apply_grads = trainer.apply_gradients(zip(grads, global_vars))
 
 
-# Noisy layers implementation is based on
-# https://arxiv.org/abs/1706.10295
-def noisy_dense(x, size, name, bias=True, activation_fn=tf.identity, noise_dist = 'factorized'):
+    # Noisy layers implementation is based on
+    # https://arxiv.org/abs/1706.10295
+    def noisy_dense(self, x_batch, size, name, bias=True, activation_fn=tf.identity, noise_dist = 'factorized'):
 
-    # Create noise variables depending on chosen noise distribution
-    with tf.variable_scope(name):
-        if noise_dist == 'factorized':
-            noise_input = tf.get_variable("noise_input_layer",
-                                            shape=[x.get_shape().as_list()[1], 1],
+        # We assume batched input [batch_size, time_steps, dimension]
+        # Reshape x_batch into the form [batch_size * time_steps, dimension]
+        # ToDo: infer correct size of previous layer (at the moment hard coded)
+        x = tf.reshape(x_batch, [-1, self.shared_config["Cell_Units"]])
+
+        # Create noise variables depending on chosen noise distribution
+        with tf.variable_scope(name):
+            if noise_dist == 'factorized':
+                noise_input = tf.get_variable("noise_input_layer",
+                                                shape=[x.get_shape().as_list()[1], 1],
+                                                initializer = tf.random_normal_initializer,
+                                                trainable= False)
+
+                noise_output = tf.get_variable("noise_output_layer",
+                                                shape=[1, size],
+                                                initializer = tf.random_normal_initializer,
+                                               trainable=False)
+
+                # Initializer of \mu and \sigma in case of factorized noise distribution
+                mu_init = tf.random_uniform_initializer(minval=-1*1/np.power(x.get_shape().as_list()[1], 0.5),
+                                                        maxval=1*1/np.power(x.get_shape().as_list()[1], 0.5))
+                sigma_init = tf.constant_initializer(0.4/np.power(x.get_shape().as_list()[1], 0.5))
+
+                def f(x):
+                    return tf.multiply(tf.sign(x), tf.pow(tf.abs(x), 0.5))
+
+                f_p = f(noise_input)
+                f_q = f(noise_output)
+                w_epsilon = f_p * f_q
+
+                b_epsilon = tf.squeeze(f_q)
+
+            if noise_dist == 'independent':
+                noise_input = tf.get_variable("noise_input_layer",
+                                            shape=[x.get_shape().as_list()[1], size],
                                             initializer = tf.random_normal_initializer,
-                                            trainable= False)
+                                            trainable=False)
+                noise_output = tf.get_variable("noise_output_layer",
+                                                shape=[1, size],
+                                                initializer = tf.random_normal_initializer,
+                                               trainable=False)
 
-            noise_output = tf.get_variable("noise_output_layer",
-                                            shape=[1, size],
-                                            initializer = tf.random_normal_initializer,
-                                           trainable=False)
+                # Initializer of \mu and \sigma in case of independent noise distribution
+                mu_init = tf.random_uniform_initializer(minval=-np.power(3 / x.get_shape().as_list()[1], 0.5),
+                                                        maxval= np.power(3 / x.get_shape().as_list()[1], 0.5))
+                sigma_init = tf.constant_initializer(0.017)
 
-            # Initializer of \mu and \sigma in case of factorized noise distribution
-            mu_init = tf.random_uniform_initializer(minval=-1*1/np.power(x.get_shape().as_list()[1], 0.5),
-                                                    maxval=1*1/np.power(x.get_shape().as_list()[1], 0.5))
-            sigma_init = tf.constant_initializer(0.4/np.power(x.get_shape().as_list()[1], 0.5))
+                w_epsilon = tf.identity(noise_input)
+                b_epsilon = tf.squeeze(noise_output)
 
-            def f(x):
-                return tf.multiply(tf.sign(x), tf.pow(tf.abs(x), 0.5))
-
-            f_p = f(noise_input)
-            f_q = f(noise_output)
-            w_epsilon = f_p * f_q
-
-            b_epsilon = tf.squeeze(f_q)
-
-        if noise_dist == 'independent':
-            noise_input = tf.get_variable("noise_input_layer",
-                                        shape=[x.get_shape().as_list()[1], size],
-                                        initializer = tf.random_normal_initializer,
-                                        trainable=False)
-            noise_output = tf.get_variable("noise_output_layer",
-                                            shape=[1, size],
-                                            initializer = tf.random_normal_initializer,
-                                           trainable=False)
-
-            # Initializer of \mu and \sigma in case of independent noise distribution
-            mu_init = tf.random_uniform_initializer(minval=-np.power(3 / x.get_shape().as_list()[1], 0.5),
-                                                    maxval= np.power(3 / x.get_shape().as_list()[1], 0.5))
-            sigma_init = tf.constant_initializer(0.017)
-
-            w_epsilon = tf.identity(noise_input)
-            b_epsilon = tf.squeeze(noise_output)
-
-    with tf.variable_scope(name + "_trainable"):
-        # w = w_mu + w_sigma*w_epsilon
-        w_mu = tf.get_variable("w_mu", [x.get_shape()[1], size], initializer=mu_init)
-        w_sigma = tf.get_variable("w_sigma", [x.get_shape()[1], size], initializer=sigma_init)
-        w = w_mu + tf.multiply(w_sigma, w_epsilon)
-        ret = tf.matmul(x, w)
-        if bias:
-            # b = b_mu + b_sigma*b_epsilon
-            b_mu = tf.get_variable("b_mu", [size], initializer=mu_init)
-            b_sigma = tf.get_variable("b_sigma", [size], initializer=sigma_init)
-            b = b_mu + tf.multiply(b_sigma, b_epsilon)
-            return(activation_fn(ret + b))
-        else:
-            return(activation_fn(ret))
+        with tf.variable_scope(name + "_trainable"):
+            # w = w_mu + w_sigma*w_epsilon
+            w_mu = tf.get_variable("w_mu", [x.get_shape()[1], size], initializer=mu_init)
+            w_sigma = tf.get_variable("w_sigma", [x.get_shape()[1], size], initializer=sigma_init)
+            w = w_mu + tf.multiply(w_sigma, w_epsilon)
+            ret = tf.matmul(x, w)
+            if bias:
+                # b = b_mu + b_sigma*b_epsilon
+                b_mu = tf.get_variable("b_mu", [size], initializer=mu_init)
+                b_sigma = tf.get_variable("b_sigma", [size], initializer=sigma_init)
+                b = b_mu + tf.multiply(b_sigma, b_epsilon)
+                result_ = activation_fn(ret + b)
+                # Reshape back to [batch_size, time_steps, size]
+                result_reshape = tf.reshape(result_, [tf.shape(x_batch)[0], -1, size])
+                return (result_reshape)
+            else:
+                result_ = activation_fn(ret)
+                # Reshape back to [batch_size, time_steps, size]
+                result_reshape = tf.reshape(result_, [tf.shape(x_batch)[0], -1, size])
+                return (result_reshape)
