@@ -34,7 +34,9 @@ class AC_Network():
         self.tau_pcl = tau
         self.rollout_pcl = rollout
 
-        with tf.variable_scope(scope):
+        # Save scope name
+        self.scope = scope
+        with tf.variable_scope(self.scope):
 
             # Input --> Shape [batch_size, time_length, feature_size]
             self.inputs = tf.placeholder(shape=[None, None, s_size], dtype=tf.float32)
@@ -49,8 +51,8 @@ class AC_Network():
             self.value = self.build_value_network(shared_output)
 
             # Only the worker network need ops for loss functions and gradient updating.
-            if scope != 'global':
-                self.setup_loss_gradients_summary(scope, trainer, a_size, method)
+            if self.scope != 'global':
+                self.setup_loss_gradients_summary(trainer, a_size, method)
 
 
     def build_shared_network(self, add_summaries=False):
@@ -73,19 +75,16 @@ class AC_Network():
                 length = tf.reduce_sum(used, 1)
                 length = tf.cast(length, tf.int32)
                 return length
-
             self.lengths_episodes = length(self.inputs)
 
+            # Size of LSTM layer
             self.cell_units = self.shared_config["Cell_Units"]
             # Recurrent network for temporal dependencies
             lstm_cell = tf.contrib.rnn.BasicLSTMCell(self.cell_units, state_is_tuple=True)
-            #c_init = np.zeros((1, lstm_cell.state_size.c), np.float32)
-            #h_init = np.zeros((1, lstm_cell.state_size.h), np.float32)
-            #self.state_init = [c_init, h_init]
+            # Hidden states of LSTM cell
             c_in = tf.placeholder(tf.float32, [None, lstm_cell.state_size.c])
             h_in = tf.placeholder(tf.float32, [None, lstm_cell.state_size.h])
             self.state_in = [c_in, h_in]
-            #rnn_in = tf.expand_dims(self.inputs, [0])
             rnn_in = self.inputs
             state_in = tf.contrib.rnn.LSTMStateTuple(c_in, h_in)
             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
@@ -93,10 +92,9 @@ class AC_Network():
                 initial_state=state_in,
                 time_major=False,
                 sequence_length=length(self.inputs))
-            #lstm_c, lstm_h = lstm_state
-            #self.state_out = (lstm_c[:1, :], lstm_h[:1, :])
+            # Current hidden States that are propagated
             self.state_out = lstm_state
-            #rnn_out = tf.reshape(lstm_outputs, [-1, cell_units])
+            # Output of Network propagated on to the value and policy heads
             self.rnn_out = lstm_outputs
 
         else:
@@ -149,7 +147,7 @@ class AC_Network():
                                               activation_fn=tf.nn.softmax,
                                               weights_initializer=normalized_columns_initializer(0.01),
                                               biases_initializer=None)
-                for units in layers[:1]:
+                for units in layers[1:]:
                     policy = slim.fully_connected(policy, units,
                                                   activation_fn=tf.nn.softmax,
                                                   weights_initializer=normalized_columns_initializer(0.01),
@@ -169,7 +167,7 @@ class AC_Network():
 
     # Function defining the tensorflow graph of the loss functions
     # and the global and worker gradients
-    def setup_loss_gradients_summary(self, scope, trainer, a_size, method = "A3C"):
+    def setup_loss_gradients_summary(self, trainer, a_size, method = "A3C"):
 
 
         if method == "A3C":
@@ -199,7 +197,8 @@ class AC_Network():
                     # Value loss function
                     self.value_loss = tf.reduce_mean(tf.map_fn(lambda i: value_loss_array.gather([i]),
                                                                 tf.range(length_batch),
-                                                                dtype=tf.float32))
+                                                                dtype=tf.float32)* tf.cast(self.lengths_episodes,
+                                                                                              dtype=tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
                 with tf.variable_scope("policy_loss"):
 
                     # Tensorarray to keep value loss for all episodes
@@ -217,7 +216,8 @@ class AC_Network():
 
                     self.policy_loss = tf.reduce_mean(tf.map_fn(lambda i: policy_loss_array.gather([i]),
                                                                 tf.range(length_batch),
-                                                                dtype = tf.float32))
+                                                                dtype = tf.float32) * tf.cast(self.lengths_episodes,
+                                                                                              dtype=tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
 
                 # Softmax entropy function
                 with tf.variable_scope("entropy"):
@@ -235,7 +235,8 @@ class AC_Network():
 
                     self.entropy = tf.reduce_mean(tf.map_fn(lambda i: entropy_array.gather([i]),
                                                                 tf.range(length_batch),
-                                                                dtype = tf.float32))
+                                                                dtype = tf.float32)* tf.cast(self.lengths_episodes,
+                                                                                              dtype=tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
 
                 # If noisy net is active one can disable entropy regularization
                 if ENTROPY_REGULARIZATION:
@@ -247,19 +248,31 @@ class AC_Network():
                                           tf.range(length_batch),
                                           dtype = tf.float32)
 
-                self.loss = tf.reduce_mean(loss_map)
+                self.loss = tf.reduce_mean(loss_map* tf.cast(self.lengths_episodes,
+                                                             dtype=tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes),
+                                                                                        dtype=tf.float32)
 
 
 
-            if scope == "worker_0":
-                tf.summary.scalar('policy_loss_' + scope,
+            if self.scope == "worker_0":
+                tf.summary.scalar('policy_loss_' + self.scope,
                                   self.policy_loss)
-                tf.summary.scalar('value_loss_' + scope,
+                tf.summary.scalar('value_loss_' + self.scope,
                                   self.value_loss)
-                tf.summary.scalar('loss_' + scope,
+                tf.summary.scalar('loss_' + self.scope,
                                   self.loss)
                 #tf.summary.scalar('advantages_' + scope,
                 #                  tf.reduce_mean(self.advantages))
+
+            # Get gradients from local network using local losses
+            local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
+            self.gradients = tf.gradients(self.loss, local_vars)
+            self.var_norms = tf.global_norm(local_vars)
+            grads, self.grad_norms = tf.clip_by_global_norm(self.gradients, 40.0)
+
+            # Apply local gradients to global network
+            global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
+            self.apply_grads = trainer.apply_gradients(zip(grads, global_vars))
 
         elif method == "PCL":
 
@@ -346,27 +359,39 @@ class AC_Network():
                                                                                        dtype=tf.float32)) / tf.cast(
                     tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
 
-            if scope == "worker_0":
+            if self.scope == "worker_0":
 
-                tf.summary.scalar('policy_loss_' + scope,
+                tf.summary.scalar('policy_loss_' + self.scope,
                                   self.policy_loss)
-                tf.summary.scalar('value_loss_' + scope,
+                tf.summary.scalar('value_loss_' + self.scope,
                                   self.value_loss)
                 #tf.summary.histogram('log_probs' + scope,
                 #                     self.log_probs)
-                tf.summary.scalar('loss_' + scope,
+                tf.summary.scalar('loss_' + self.scope,
                                   self.loss)
 
-        # Get gradients from local network using local losses
-        local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)
-        self.gradients = tf.gradients(self.loss, local_vars)
-        self.var_norms = tf.global_norm(local_vars)
-        grads, self.grad_norms = tf.clip_by_global_norm(self.gradients, 40.0)
+            # ToDo: Apply different Learning Rates to value and policy parts
+            trainer_value =  tf.train.AdamOptimizer(learning_rate = 0.5 * 0.0007)
 
-        # Apply local gradients to global network
-        global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
-        self.apply_grads = trainer.apply_gradients(zip(grads, global_vars))
+            # Get gradients from local network using local losses
+            local_vars_policy = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope + "/policy_net")
+            local_vars_value = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope + "/value_net")
 
+            self.gradients_pol = tf.gradients(self.loss, local_vars_policy)
+            self.gradients_val = tf.gradients(self.loss, local_vars_value)
+
+            self.var_norms_pol = tf.global_norm(local_vars_policy)
+            self.var_norms_val = tf.global_norm(local_vars_value)
+
+            grads_pol, self.grad_norms_pol = tf.clip_by_global_norm(self.gradients_pol, 40.0)
+            grads_val, self.grad_norms_val = tf.clip_by_global_norm(self.gradients_val, 40.0)
+
+            # Apply local gradients to global network
+            global_vars_pol = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global' + "/policy_net")
+            global_vars_val = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global' + "/value_net")
+
+            self.apply_grads_pol = trainer.apply_gradients(zip(grads_pol, global_vars_pol))
+            self.apply_grads_val = trainer_value.apply_gradients(zip(grads_val, global_vars_val))
 
     # Noisy layers implementation is based on
     # https://arxiv.org/abs/1706.10295
@@ -428,17 +453,27 @@ class AC_Network():
             w_sigma = tf.get_variable("w_sigma", [x.get_shape()[1], size], initializer=sigma_init)
             w = w_mu + tf.multiply(w_sigma, w_epsilon)
             ret = tf.matmul(x, w)
+
             if bias:
                 # b = b_mu + b_sigma*b_epsilon
                 b_mu = tf.get_variable("b_mu", [size], initializer=mu_init)
                 b_sigma = tf.get_variable("b_sigma", [size], initializer=sigma_init)
                 b = b_mu + tf.multiply(b_sigma, b_epsilon)
+
+                # Track evolution of noisy paramters
+                if self.scope == "worker_0":
+                    tf.summary.histogram('sigma_b_' + name,
+                                         b_sigma)
+
                 result_ = activation_fn(ret + b)
-                # Reshape back to [batch_size, time_steps, size]
-                result_reshape = tf.reshape(result_, [tf.shape(x_batch)[0], -1, size])
-                return (result_reshape)
             else:
                 result_ = activation_fn(ret)
-                # Reshape back to [batch_size, time_steps, size]
-                result_reshape = tf.reshape(result_, [tf.shape(x_batch)[0], -1, size])
-                return (result_reshape)
+
+            # Track evolution of noisy paramters
+            if self.scope == "worker_0":
+                tf.summary.histogram('sigma_w_' + name,
+                                    w_sigma)
+
+            # Reshape back to [batch_size, time_steps, size]
+            result_reshape = tf.reshape(result_, [tf.shape(x_batch)[0], -1, size])
+            return (result_reshape)

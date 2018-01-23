@@ -94,7 +94,7 @@ def unpack_episode(sampled_eps):
 
 class Worker():
     def __init__(self, name, s_size, a_size, network_config, trainer, global_episodes,
-                 env_name, number_envs = 2,
+                 env_name, number_envs = 1,
                  tau = 0.0, rollout = 10, method = "A3C"):
 
         self.name = "worker_" + str(name)
@@ -129,25 +129,35 @@ class Worker():
 
     def train(self, states, rewards, actions, values, terminal, sess, gamma, r, merged_summary):
 
+
         # Get length of different rollouts --> Since given e.g. 10 envs maybe 5 terminated earlier
         lengths_rollouts = [int(-1 * sum(done - 1)) for done in terminal]
 
         # Get batch size
         batch_size = len(states)
 
+        # Resize final values in case we have only one env
+        r = np.reshape(r, [batch_size])
+
         # Get max_len
         max_len = len(states[0])
 
         # Here we take the rewards and values from the rollout, and use them to
         # generate the advantage and discounted returns.
-        rewards_list = [np.asarray(rewards[i].tolist()[:lengths_rollouts[i]]+[r[i]]) * REWARD_FACTOR for i in range(batch_size)]
-        discounted_rewards = [discounting(rewards_list[i], gamma)[:-1] for i in range(batch_size)]
+        rewards_list = [np.asarray(rewards[i].tolist()[:lengths_rollouts[i]]) * REWARD_FACTOR for i in range(batch_size)]
+        discounted_rewards = [discounting(rewards_list[i], gamma) for i in range(batch_size)]
 
         # Advantage estimation
         # JS, P Moritz, S Levine, M Jordan, P Abbeel,
         # "High-dimensional continuous control using generalized advantage estimation."
         # arXiv preprint arXiv:1506.02438 (2015).
-        values_list = [np.asarray(values[i].tolist()[:lengths_rollouts[i]]+[r[i]]) * REWARD_FACTOR for i in range(batch_size)]
+        values_list = []
+        # Check if episodes have been terminated, if so add 0 in the end otherwise the last value
+        for i in range(batch_size):
+            if not self.env.dones[i]:
+                values_list.append(np.asarray(values[i].tolist()[:lengths_rollouts[i]] + [r[i]]) * REWARD_FACTOR)
+            else:
+                values_list.append(np.asarray(values[i].tolist()[:lengths_rollouts[i]] + [0]) * REWARD_FACTOR)
 
         # Compute TD residual of V with discount gamma --> can be considered as the advantage of the action a_t
         advantages = [rewards[i][:lengths_rollouts[i]] + gamma * values_list[i][1:] - values_list[i][:-1]
@@ -190,12 +200,13 @@ class Worker():
                                                    self.local_AC.apply_grads],
                                                   feed_dict=feed_dict)
         else:
-            v_l, p_l, e_l, g_n, v_n, _ = sess.run([self.local_AC.value_loss,
+            v_l, p_l, e_l, g_n, v_n, _, len_ = sess.run([self.local_AC.value_loss,
                                                             self.local_AC.policy_loss,
                                                             self.local_AC.entropy,
                                                             self.local_AC.grad_norms,
                                                             self.local_AC.var_norms,
-                                                            self.local_AC.apply_grads],
+                                                            self.local_AC.apply_grads,
+                                                            self.local_AC.lengths_episodes],
                                                            feed_dict=feed_dict)
 
         return v_l , p_l , e_l , g_n, v_n, summary
@@ -234,10 +245,11 @@ class Worker():
                 self.local_AC.state_in[0]: c_init,
                 self.local_AC.state_in[1]: h_init
             }
-            summary, v_l, p_l, total_loss, _ = sess.run([merged_summary, self.local_AC.value_loss,
+            summary, v_l, p_l, total_loss, _, _ = sess.run([merged_summary, self.local_AC.value_loss,
                                                          self.local_AC.policy_loss,
                                                          self.local_AC.loss,
-                                                         self.local_AC.apply_grads],
+                                                         self.local_AC.apply_grads_pol,
+                                                         self.local_AC.apply_grads_val],
                                                         feed_dict=feed_dict_)
         else:
             # Perform training on one episode batch
@@ -251,10 +263,11 @@ class Worker():
                 self.local_AC.state_in[1]: h_init
             }
 
-            v_l, p_l, total_loss, _ = sess.run([self.local_AC.value_loss,
+            v_l, p_l, total_loss, _, _ = sess.run([self.local_AC.value_loss,
                                                 self.local_AC.policy_loss,
                                                 self.local_AC.loss,
-                                                self.local_AC.apply_grads],
+                                                self.local_AC.apply_grads_pol,
+                                                self.local_AC.apply_grads_val],
                                                feed_dict=feed_dict_)
 
         return r_ep, v_ep, summary
@@ -280,10 +293,11 @@ class Worker():
         with sess.as_default(), sess.graph.as_default():
             while not coord.should_stop():
                 sess.run(self.update_local_ops)
-                episode_values = []
-                episode_reward = []
+                self.episode_values = []
+                self.episode_reward = []
 
                 if self.method == "A3C":
+                    # Objects to hold the bacth used to update the Agent
                     self.episode_states_train = np.array([], dtype=np.float32).reshape(len(self.env),0,self.s_size)
                     self.episode_reward_train = np.array([], dtype=np.float32).reshape(len(self.env),0)
                     self.episode_actions_train = np.array([], dtype=np.float32).reshape(len(self.env),0, self.a_size)
@@ -327,7 +341,7 @@ class Worker():
                 if self.method == "PCL":
 
                     # Perform a rollout of the chosen environment
-                    episodes = self.rolloutPCL(sess, s, rnn_state, episode_count = len(self.env))
+                    episodes = self.rolloutPCL(sess, s, rnn_state, max_path_length = 1000, episode_count = len(self.env))
 
                     # Add sampled episode to replay buffer
                     self.replay_buffer.add(episodes)
@@ -376,6 +390,7 @@ class Worker():
 
                         # Get preferred action distribution
                         a, v, rnn_state, _ = self.act(s, rnn_state, sess)
+
                         # Get action for every environment
                         act_ = [np.argmax(a_) for a_ in a]
                         # Sample new state and reward from environment
@@ -385,13 +400,13 @@ class Worker():
                         self.add_to_batch(s,r,a,v,terminal)
 
                         # Get episode information for tracking the training process
-                        episode_values.append(v)
-                        episode_reward.append(r)
+                        self.episode_values.append(v)
+                        self.episode_reward.append(r)
 
                         # Train on mini batches from episode
                         if (episode_step_count % MINI_BATCH == 0 and episode_step_count > 0) or self.env.all_done():
                             v1 = sess.run([self.local_AC.value],
-                                          feed_dict={self.local_AC.inputs: s,
+                                          feed_dict={self.local_AC.inputs: s2,
                                                         self.local_AC.state_in[0]: rnn_state[0],
                                                         self.local_AC.state_in[1]: rnn_state[1]})
 
@@ -413,8 +428,8 @@ class Worker():
                         total_steps += 1
                         episode_step_count += 1
 
-                    episode_values = np.mean(np.sum(episode_values, axis = 0))
-                    episode_reward = np.mean(np.sum(episode_reward, axis = 0))
+                    episode_values = np.mean(np.sum(self.episode_values, axis = 0))
+                    episode_reward = np.mean(np.sum(self.episode_reward, axis = 0))
 
                 if episode_count % 20 == 0:
                     print("Reward: " + str(episode_reward), " | Episode", episode_count, " of " + self.name)
@@ -443,7 +458,7 @@ class Worker():
         self.episode_states_train = np.concatenate((self.episode_states_train, states), 1)
         self.episode_reward_train = np.concatenate((self.episode_reward_train, np.expand_dims(rewards, 1)), 1)
         self.episode_actions_train = np.concatenate((self.episode_actions_train, actions), 1)
-        self.episode_values_train = np.concatenate((self.episode_values_train, np.expand_dims(np.squeeze(values), 1)), 1)
+        self.episode_values_train = np.concatenate((self.episode_values_train, np.reshape(values, [np.shape(values)[0], 1])), 1)
         self.episode_done_train = np.concatenate((self.episode_done_train, np.expand_dims(terminals, 1)), 1)
 
     # Clear current A3C minibatch
