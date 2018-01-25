@@ -50,17 +50,6 @@ def discounting(x, gamma):
 def norm(x, upper, lower=0.):
     return (x-lower)/max((upper-lower), 1e-12)
 
-# Sample new weights if noisy network
-def sample_new_weights(scopes, sess):
-    # Update variables
-    #print(scopes)
-    for scope_ in scopes:
-        print(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_))
-        assig_ops = []
-        for i in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_):
-            assig_ops.append(i.assign(np.random.normal(size=i.get_shape())))  # i.name if you want just a name
-        sess.run(assig_ops)
-
 # Unpack given episodes that are saved into a dict
 def unpack_episode(sampled_eps):
 

@@ -36,6 +36,10 @@ class AC_Network():
 
         # Save scope name
         self.scope = scope
+
+        # List capturing the sampling assignments for the noisy layers
+        self.noisy_sampling = []
+
         with tf.variable_scope(self.scope):
 
             # Input --> Shape [batch_size, time_length, feature_size]
@@ -446,6 +450,15 @@ class AC_Network():
 
                 w_epsilon = tf.identity(noise_input)
                 b_epsilon = tf.squeeze(noise_output)
+
+            # Create assign operations for the tensorflow variables noise_input and noise_output
+            assign_noise_input = tf.assign(noise_input, tf.random_normal(tf.shape(noise_input)),
+                                           name = "sample_input_" + name)
+            assign_noise_output = tf.assign(noise_output, tf.random_normal(tf.shape(noise_output)),
+                                            name = "sample_output_" + name)
+            # Append to global sample assignment list
+            self.noisy_sampling.append(assign_noise_input)
+            self.noisy_sampling.append(assign_noise_output)
 
         with tf.variable_scope(name + "_trainable"):
             # w = w_mu + w_sigma*w_epsilon

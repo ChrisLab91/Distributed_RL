@@ -13,7 +13,7 @@ import util as U
 
 from ac_network import AC_Network
 from worker import Worker
-from worker import sample_new_weights, update_target_graph, weighted_pick, discounting, norm, unpack_episode
+from worker import update_target_graph, weighted_pick, discounting, norm, unpack_episode
 
 # PARAMETERS
 
@@ -64,9 +64,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                               shared_config=dict(kind='RNN',
                                                  Cell_Units=16),
                               policy_config=dict(layers=[ACTION_DIM],
-                                                 noise_dist=None),
+                                                 noise_dist="independent"),
                               value_config=dict(layers=[1],
-                                                noise_dist=None))
+                                                noise_dist="independent"))
 
         # Learning rate
         LEARNING_RATE = 0.0005
@@ -150,23 +150,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                 # sample new noisy parameters in fully connected layers if
                 # noisy net is used
-                if episode_count % 15 == 0:
-                    if worker.noisy_policy is not None:
-                        with tf.variable_scope(worker.name):
-                            with tf.variable_scope("policy_net"):
-                                # Based on layers set scopes
-                                scopes = []
-                                for i in range(worker.policy_layers):
-                                    scopes.append(worker.name + "/policy_net/" + "noise_action_" + str(i) + "/")
-                                sample_new_weights(scopes, sess)
-
-                    if worker.noisy_value is not None:
-                        with tf.variable_scope(worker.name):
-                            with tf.variable_scope("value_net"):
-                                scopes = []
-                                for i in range(worker.value_layers):
-                                    scopes.append(worker.name + "/value_net/" + "noise_value_" + str(i) + "/")
-                                sample_new_weights(scopes, sess)
+                # if episode_count % 15 == 0:
+                if worker.noisy_policy is not None or worker.noisy_value is not None:
+                    sess.run(worker.local_AC.noisy_sampling)
 
                 if worker.method == "PCL":
 
