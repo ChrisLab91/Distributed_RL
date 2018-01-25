@@ -55,7 +55,7 @@ def sample_new_weights(scopes, sess):
     # Update variables
     #print(scopes)
     for scope_ in scopes:
-        #print(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_))
+        print(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_))
         assig_ops = []
         for i in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=scope_):
             assig_ops.append(i.assign(np.random.normal(size=i.get_shape())))  # i.name if you want just a name
@@ -127,7 +127,7 @@ class Worker():
         self.noisy_value = network_config["value_config"]["noise_dist"]
         self.value_layers = len(network_config["value_config"]["layers"])
 
-    def train(self, states, rewards, actions, values, terminal, sess, gamma, r, merged_summary):
+    def train(self, states, rewards, actions, values, terminal, sess, gamma, r):
 
 
         # Get length of different rollouts --> Since given e.g. 10 envs maybe 5 terminated earlier
@@ -192,7 +192,7 @@ class Worker():
 
         summary = None
         if self.name == "worker_0":
-            summary, v_l, p_l, e_l, g_n, v_n, _ = sess.run([merged_summary, self.local_AC.value_loss,
+            v_l, p_l, e_l, g_n, v_n, _ = sess.run([self.local_AC.value_loss,
                                                    self.local_AC.policy_loss,
                                                    self.local_AC.entropy,
                                                    self.local_AC.grad_norms,
@@ -212,7 +212,7 @@ class Worker():
         return v_l , p_l , e_l , g_n, v_n, summary
 
     # Training operations PCL
-    def train_pcl(self, episodes, gamma, sess, merged_summary):
+    def train_pcl(self, episodes, gamma, sess):
 
         # Train on sampled episodes
 
@@ -245,7 +245,7 @@ class Worker():
                 self.local_AC.state_in[0]: c_init,
                 self.local_AC.state_in[1]: h_init
             }
-            summary, v_l, p_l, total_loss, _, _ = sess.run([merged_summary, self.local_AC.value_loss,
+            v_l, p_l, total_loss, _, _ = sess.run([ self.local_AC.value_loss,
                                                          self.local_AC.policy_loss,
                                                          self.local_AC.loss,
                                                          self.local_AC.apply_grads_pol,

@@ -22,9 +22,9 @@ network_config = dict(shared = True,
                       shared_config = dict(kind = 'RNN',
                                            Cell_Units = 16),
                       policy_config = dict(layers = [ACTION_DIM],
-                                           noise_dist = "independent"),
+                                           noise_dist = None),
                       value_config = dict(layers = [1],
-                                          noise_dist = "independent"))
+                                          noise_dist = None))
 
 # Learning rate
 LEARNING_RATE = 0.0005
@@ -35,7 +35,7 @@ GAMMA = 0.99
 LOG_DIR = '~/A3C/MyDistTest/'
 
 # Choose RL method (A3C, PCL)
-METHOD = "PCL"
+METHOD = "A3C"
 print("Run method: " + METHOD)
 
 # PCL variables
