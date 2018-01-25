@@ -58,6 +58,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         ENV_NAME = 'CartPole-v0'  # Discrete (4, 2)
         STATE_DIM = 4
         ACTION_DIM = 2
+        NUM_ENVS = 3
 
         # Network configuration
         network_config = dict(shared=True,
@@ -66,7 +67,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                               policy_config=dict(layers=[ACTION_DIM],
                                                  noise_dist="independent"),
                               value_config=dict(layers=[1],
-                                                noise_dist="independent"))
+                                                noise_dist=None))
 
         # Learning rate
         LEARNING_RATE = 0.0005
@@ -74,10 +75,11 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         GAMMA = 0.99
 
         # Summary LOGDIR
-        LOG_DIR = '~/A3C/MyDistTest/'
+        # LOG_DIR = '~/A3C/MyDistTest/'
+        LOG_DIR = '/home/adrian/Schreibtisch/Uni/Data-Innovation-Lab/DILAB/tensorflowlogs'
 
         # Choose RL method (A3C, PCL)
-        METHOD = "A3C"
+        METHOD = "PCL"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -96,16 +98,31 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', None, network_config, tau=TAU, rollout=ROLLOUT,
                                         method=METHOD)  # Generate global network
 
-        with tf.device(worker_device):
-            worker = Worker(TASK_ID, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
-                                  ENV_NAME, tau = TAU, rollout= ROLLOUT, method=METHOD)
+            with tf.device(worker_device):
+                worker = Worker(TASK_ID, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
+                                      ENV_NAME, number_envs =  NUM_ENVS, tau = TAU, rollout= ROLLOUT, method=METHOD)
+
+        # Get summary information
+        if worker.name == "worker_0":
+            merged_summary = tf.summary.merge_all()
+            writer = tf.summary.FileWriter(LOG_DIR, graph=tf.get_default_graph())
+        else:
+            merged_summary = None
 
         local_init_op = tf.global_variables_initializer()
+
+        #sv = tf.train.Supervisor(is_chief=(TASK_ID == 0),
+        #                         logdir=LOG_DIR,
+        #                         init_op=local_init_op,
+        #                         summary_op=merged_summary)
+                                 #saver=saver,
+                                 #global_step=global_step,
+                                 #save_model_secs=600)
+
         with tf.Session(server.target) as sess:
             sess.run(local_init_op)
 
         with tf.train.MonitoredTrainingSession(master=server.target) as sess:
-
 
             # Define input to worker.work( gamma, sess, coord, merged_summary, writer_summary)
             gamma = GAMMA
@@ -175,7 +192,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                     if train_online:
 
                         # Train PCL agent
-                        _, _, summary = worker.train_pcl(episodes, gamma, sess)
+                        _, _, summary = worker.train_pcl(episodes, gamma, sess, merged_summary)
 
                         # Update summary information
                         train_steps = train_steps + 1
@@ -188,12 +205,17 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         sampled_episodes = worker.replay_buffer.sample(episode_count=len(worker.env))
 
                         # Train PCL agent
-                        r_ep, v_ep, _ = worker.train_pcl(sampled_episodes, gamma, sess)
+                        r_ep, v_ep, summary = worker.train_pcl(sampled_episodes, gamma, sess, merged_summary)
+
+                        # ToDo: After the network has been updated update the learning rate based on
+                        # ToDO: the KL-Divergence
+                        # ToDo: feed sampled_episodes -> Receive log_probs and also feed log_probs before the update
+                        # ToDo: update_learning_rate(kl_divergence) --> receive new learning rate
 
                         # Update summary information
                         train_steps = train_steps + 1
-                        #if worker.name == "worker_0":
-                        #    writer_summary.add_summary(summary, train_steps)
+                        if worker.name == "worker_0":
+                            writer.add_summary(summary, train_steps)
 
                         # Write add. summary information
                         episode_reward_offline = np.mean(np.sum(r_ep, axis=1))
@@ -230,12 +252,18 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                                           worker.episode_actions_train,
                                                                           worker.episode_values_train,
                                                                           worker.episode_done_train,
-                                                                          sess, gamma, np.squeeze(v1))
+                                                                          sess, gamma, np.squeeze(v1), merged_summary)
+
+                            # ToDo: After the network has been updated update the learning rate based on
+                            # ToDO: the KL-Divergence
+                            # ToDo: feed sampled_episodes -> Receive log_probs and also feed log_probs before the update
+                            # ToDo: update_learning_rate(kl_divergence) --> receive new learning rate
+
                             train_steps = train_steps + 1
 
                             # Update summary information
-                            #if worker.name == "worker_0":
-                            #    writer_summary.add_summary(summary, train_steps)
+                            if worker.name == "worker_0":
+                                writer.add_summary(summary, train_steps)
 
                             # Reset A3C minibatch after it has been used to update the model
                             worker.reset_batch()
@@ -265,6 +293,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                 if episode_count == EPISODE_RUNS:
                     print("Worker stops because max episode runs are reached")
                     sess.request_stop()
+
+        # Ask for all the services to stop.
+        #sv.stop()
 
 
 if __name__ == '__main__':

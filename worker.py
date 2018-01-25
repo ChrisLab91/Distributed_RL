@@ -116,7 +116,7 @@ class Worker():
         self.noisy_value = network_config["value_config"]["noise_dist"]
         self.value_layers = len(network_config["value_config"]["layers"])
 
-    def train(self, states, rewards, actions, values, terminal, sess, gamma, r):
+    def train(self, states, rewards, actions, values, terminal, sess, gamma, r, merged_summary):
 
 
         # Get length of different rollouts --> Since given e.g. 10 envs maybe 5 terminated earlier
@@ -181,7 +181,7 @@ class Worker():
 
         summary = None
         if self.name == "worker_0":
-            v_l, p_l, e_l, g_n, v_n, _ = sess.run([self.local_AC.value_loss,
+            summary, v_l, p_l, e_l, g_n, v_n, _ = sess.run([merged_summary, self.local_AC.value_loss,
                                                    self.local_AC.policy_loss,
                                                    self.local_AC.entropy,
                                                    self.local_AC.grad_norms,
@@ -201,7 +201,7 @@ class Worker():
         return v_l , p_l , e_l , g_n, v_n, summary
 
     # Training operations PCL
-    def train_pcl(self, episodes, gamma, sess):
+    def train_pcl(self, episodes, gamma, sess, merged_summary):
 
         # Train on sampled episodes
 
@@ -234,7 +234,7 @@ class Worker():
                 self.local_AC.state_in[0]: c_init,
                 self.local_AC.state_in[1]: h_init
             }
-            v_l, p_l, total_loss, _, _ = sess.run([ self.local_AC.value_loss,
+            summary, v_l, p_l, total_loss, _, _ = sess.run([merged_summary, self.local_AC.value_loss,
                                                          self.local_AC.policy_loss,
                                                          self.local_AC.loss,
                                                          self.local_AC.apply_grads_pol,

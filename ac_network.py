@@ -286,6 +286,10 @@ class AC_Network():
                 self.discount = tf.placeholder(shape=[None], dtype=tf.float32)
                 self.rollout = tf.placeholder(tf.int32, shape=())
 
+                # ToDo: Compute KL-Divergence in order to update learning rate
+                # ToDo: We require the log probs of the "old" policy and the log probs of the new one
+                self.oldLogProbs = tf.placeholder(shape=[None, None, a_size])
+
                 # Get first and last values of episode sub-batches
                 length_episode = tf.shape(self.value)[1]
                 length_batch = tf.shape(self.value)[0]
@@ -401,16 +405,11 @@ class AC_Network():
     # https://arxiv.org/abs/1706.10295
     def noisy_dense(self, x_batch, size, name, bias=True, activation_fn=tf.identity, noise_dist = 'factorized'):
 
-        # We assume batched input [batch_size, time_steps, dimension]
-        # Reshape x_batch into the form [batch_size * time_steps, dimension]
-        # ToDo: infer correct size of previous layer (at the moment hard coded)
-        x = tf.reshape(x_batch, [-1, self.shared_config["Cell_Units"]])
-
         # Create noise variables depending on chosen noise distribution
         with tf.variable_scope(name):
             if noise_dist == 'factorized':
                 noise_input = tf.get_variable("noise_input_layer",
-                                                shape=[x.get_shape().as_list()[1], 1],
+                                                shape=[x_batch.get_shape().as_list()[2], 1],
                                                 initializer = tf.random_normal_initializer,
                                                 trainable= False)
 
@@ -420,8 +419,8 @@ class AC_Network():
                                                trainable=False)
 
                 # Initializer of \mu and \sigma in case of factorized noise distribution
-                mu_init = tf.random_uniform_initializer(minval=-1*1/np.power(x.get_shape().as_list()[1], 0.5),
-                                                        maxval=1*1/np.power(x.get_shape().as_list()[1], 0.5))
+                mu_init = tf.random_uniform_initializer(minval=-1*1/np.power(x_batch.get_shape().as_list()[2], 0.5),
+                                                        maxval=1*1/np.power(x_batch.get_shape().as_list()[2], 0.5))
                 sigma_init = tf.constant_initializer(0.4/np.power(x.get_shape().as_list()[1], 0.5))
 
                 def f(x):
@@ -435,7 +434,7 @@ class AC_Network():
 
             if noise_dist == 'independent':
                 noise_input = tf.get_variable("noise_input_layer",
-                                            shape=[x.get_shape().as_list()[1], size],
+                                            shape=[x_batch.get_shape().as_list()[2], size],
                                             initializer = tf.random_normal_initializer,
                                             trainable=False)
                 noise_output = tf.get_variable("noise_output_layer",
@@ -444,8 +443,8 @@ class AC_Network():
                                                trainable=False)
 
                 # Initializer of \mu and \sigma in case of independent noise distribution
-                mu_init = tf.random_uniform_initializer(minval=-np.power(3 / x.get_shape().as_list()[1], 0.5),
-                                                        maxval= np.power(3 / x.get_shape().as_list()[1], 0.5))
+                mu_init = tf.random_uniform_initializer(minval=-np.power(3 / x_batch.get_shape().as_list()[2], 0.5),
+                                                        maxval= np.power(3 / x_batch.get_shape().as_list()[2], 0.5))
                 sigma_init = tf.constant_initializer(0.017)
 
                 w_epsilon = tf.identity(noise_input)
@@ -462,9 +461,14 @@ class AC_Network():
 
         with tf.variable_scope(name + "_trainable"):
             # w = w_mu + w_sigma*w_epsilon
-            w_mu = tf.get_variable("w_mu", [x.get_shape()[1], size], initializer=mu_init)
-            w_sigma = tf.get_variable("w_sigma", [x.get_shape()[1], size], initializer=sigma_init)
+            w_mu = tf.get_variable("w_mu", [x_batch.get_shape()[2], size], initializer=mu_init)
+            w_sigma = tf.get_variable("w_sigma", [x_batch.get_shape()[2], size], initializer=sigma_init)
             w = w_mu + tf.multiply(w_sigma, w_epsilon)
+
+            # We assume batched input [batch_size, time_steps, dimension]
+            # Reshape x_batch into the form [batch_size * time_steps, dimension]
+            dim_input = tf.shape(x_batch)[2]
+            x = tf.reshape(x_batch, [-1, dim_input])
             ret = tf.matmul(x, w)
 
             if bias:
