@@ -288,7 +288,7 @@ class AC_Network():
 
                 # ToDo: Compute KL-Divergence in order to update learning rate
                 # ToDo: We require the log probs of the "old" policy and the log probs of the new one
-                self.oldLogProbs = tf.placeholder(shape=[None, None, a_size])
+                self.oldLogProbs = tf.placeholder(shape=[None, None, a_size], dtype=tf.float32)
 
                 # Get first and last values of episode sub-batches
                 length_episode = tf.shape(self.value)[1]
