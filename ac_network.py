@@ -22,7 +22,10 @@ def normalized_columns_initializer(std=1.0):
 
 
 class AC_Network():
-    def __init__(self, s_size, a_size, scope, trainer, network_config, tau = 0.0, rollout = 10, method = "A3C"):
+    def __init__(self, s_size, a_size, scope, network_config, learning_rate = 0.05, tau = 0.0, rollout = 10, method = "A3C"):
+
+        # Save scope name
+        self.scope = scope
 
         # Read network configurations
         self.shared = network_config["shared"]
@@ -30,12 +33,17 @@ class AC_Network():
         self.policy_config = network_config["policy_config"]
         self.value_config = network_config["value_config"]
 
+        # Read optimizer config
+        if self.scope != "global":
+            self.lr = tf.Variable(initial_value=learning_rate, dtype=tf.float32, trainable=False)
+            self.trainer_pol = tf.train.AdamOptimizer(learning_rate=self.lr)
+            self.trainer_val = tf.train.AdamOptimizer(learning_rate=self.lr * 0.5)
+            self.new_learning_rate = tf.placeholder(shape=(), dtype=tf.float32)
+            self.lr_update = self.lr.assign(self.new_learning_rate)
+
         # Paramters required by PCL
         self.tau_pcl = tau
         self.rollout_pcl = rollout
-
-        # Save scope name
-        self.scope = scope
 
         # List capturing the sampling assignments for the noisy layers
         self.noisy_sampling = []
@@ -56,7 +64,7 @@ class AC_Network():
 
             # Only the worker network need ops for loss functions and gradient updating.
             if self.scope != 'global':
-                self.setup_loss_gradients_summary(trainer, a_size, method)
+                self.setup_loss_gradients_summary(a_size, method)
 
 
     def build_shared_network(self, add_summaries=False):
@@ -171,12 +179,13 @@ class AC_Network():
 
     # Function defining the tensorflow graph of the loss functions
     # and the global and worker gradients
-    def setup_loss_gradients_summary(self, trainer, a_size, method = "A3C"):
+    def setup_loss_gradients_summary(self, a_size, method = "A3C"):
 
 
         if method == "A3C":
             with tf.variable_scope("loss"):
                 self.actions = tf.placeholder(shape=[None, None, a_size], dtype=tf.float32)
+                self.rewards = tf.placeholder(shape=[None, None], dtype=tf.float32)
                 self.target_v = tf.placeholder(shape=[None, None], dtype=tf.float32)
                 self.advantages = tf.placeholder(shape=[None, None], dtype=tf.float32)
 
@@ -199,10 +208,11 @@ class AC_Network():
                         lambda i, ta: i < length_batch, compute_value_loss, [0, value_loss_array_init])
 
                     # Value loss function
-                    self.value_loss = tf.reduce_mean(tf.map_fn(lambda i: value_loss_array.gather([i]),
+                    self.value_loss = tf.reduce_sum(tf.map_fn(lambda i: value_loss_array.gather([i]) *
+                                                                         tf.cast(self.lengths_episodes[i],
+                                                                                 dtype=tf.float32),
                                                                 tf.range(length_batch),
-                                                                dtype=tf.float32)* tf.cast(self.lengths_episodes,
-                                                                                              dtype=tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
+                                                                dtype=tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
                 with tf.variable_scope("policy_loss"):
 
                     # Tensorarray to keep value loss for all episodes
@@ -218,10 +228,11 @@ class AC_Network():
                     _, policy_loss_array = tf.while_loop(
                             lambda i, ta: i < length_batch, compute_policy_loss, [0, policy_loss_array_init])
 
-                    self.policy_loss = tf.reduce_mean(tf.map_fn(lambda i: policy_loss_array.gather([i]),
+                    self.policy_loss = tf.reduce_sum(tf.map_fn(lambda i: policy_loss_array.gather([i]) *
+                                                                          tf.cast(self.lengths_episodes[i],
+                                                                                  dtype=tf.float32),
                                                                 tf.range(length_batch),
-                                                                dtype = tf.float32) * tf.cast(self.lengths_episodes,
-                                                                                              dtype=tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
+                                                                dtype = tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
 
                 # Softmax entropy function
                 with tf.variable_scope("entropy"):
@@ -237,36 +248,28 @@ class AC_Network():
                     _, entropy_array = tf.while_loop(
                             lambda i, ta: i < length_batch, compute_entropy, [0, entropy_array_init])
 
-                    self.entropy = tf.reduce_mean(tf.map_fn(lambda i: entropy_array.gather([i]),
+                    self.entropy = tf.reduce_sum(tf.map_fn(lambda i: entropy_array.gather([i]) *
+                                                                      tf.cast(self.lengths_episodes[i],
+                                                                               dtype=tf.float32),
                                                                 tf.range(length_batch),
-                                                                dtype = tf.float32)* tf.cast(self.lengths_episodes,
-                                                                                              dtype=tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
+                                                                dtype = tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
 
                 # If noisy net is active one can disable entropy regularization
                 if ENTROPY_REGULARIZATION:
-                    loss_map = tf.map_fn(lambda i: 0.5 * value_loss_array.gather([i]) + policy_loss_array.gather([i]) - entropy_array.gather([i]) * ENTROPY_REGULARIZATION_LAMBDA,
+                    loss_map = tf.map_fn(lambda i: (0.5 * value_loss_array.gather([i]) + policy_loss_array.gather([i]) - entropy_array.gather([i]) * ENTROPY_REGULARIZATION_LAMBDA)
+                                                   * tf.cast(self.lengths_episodes[i],
+                                                             dtype=tf.float32),
                                           tf.range(length_batch),
                                           dtype = tf.float32)
                 else:
-                    loss_map = tf.map_fn(lambda i: 0.5 * value_loss_array.gather([i]) + policy_loss_array.gather([i]),
+                    loss_map = tf.map_fn(lambda i: (0.5 * value_loss_array.gather([i]) + policy_loss_array.gather([i])) *
+                                                   tf.cast(self.lengths_episodes[i],
+                                                             dtype=tf.float32),
                                           tf.range(length_batch),
                                           dtype = tf.float32)
 
-                self.loss = tf.reduce_mean(loss_map* tf.cast(self.lengths_episodes,
-                                                             dtype=tf.float32))/tf.cast(tf.reduce_sum(self.lengths_episodes),
-                                                                                        dtype=tf.float32)
-
-
-
-            if self.scope == "worker_0":
-                tf.summary.scalar('policy_loss_' + self.scope,
-                                  self.policy_loss)
-                tf.summary.scalar('value_loss_' + self.scope,
-                                  self.value_loss)
-                tf.summary.scalar('loss_' + self.scope,
-                                  self.loss)
-                #tf.summary.scalar('advantages_' + scope,
-                #                  tf.reduce_mean(self.advantages))
+                self.loss = tf.reduce_sum(loss_map)/tf.cast(tf.reduce_sum(self.lengths_episodes),
+                                                             dtype=tf.float32)
 
             # Get gradients from local network using local losses
             local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
@@ -276,7 +279,7 @@ class AC_Network():
 
             # Apply local gradients to global network
             global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
-            self.apply_grads = trainer.apply_gradients(zip(grads, global_vars))
+            self.apply_grads = self.trainer_pol.apply_gradients(zip(grads, global_vars))
 
         elif method == "PCL":
 
@@ -285,10 +288,6 @@ class AC_Network():
                 self.rewards = tf.placeholder(shape=[None, None], dtype=tf.float32)
                 self.discount = tf.placeholder(shape=[None], dtype=tf.float32)
                 self.rollout = tf.placeholder(tf.int32, shape=())
-
-                # ToDo: Compute KL-Divergence in order to update learning rate
-                # ToDo: We require the log probs of the "old" policy and the log probs of the new one
-                self.oldLogProbs = tf.placeholder(shape=[None, None, a_size], dtype=tf.float32)
 
                 # Get first and last values of episode sub-batches
                 length_episode = tf.shape(self.value)[1]
@@ -304,7 +303,8 @@ class AC_Network():
 
                     def compute_value_loss(i, ta, ta_mean):
                         value_loss = -1 * self.value[i][:(self.lengths_episodes[i] - self.rollout + 1)] + self.discount[self.rollout - 1] * self.value[i][-(self.lengths_episodes[i] + (length_episode - self.lengths_episodes[i]) - self.rollout + 1):self.lengths_episodes[i]]
-                        value_loss_mean = tf.reduce_mean(value_loss)
+                        value_loss_mean = tf.reduce_mean(value_loss) * tf.cast(self.lengths_episodes[i],
+                                                                                       dtype=tf.float32)
                         return i + 1, ta.write(i, value_loss), ta_mean.write(i, value_loss_mean)
 
                     # Loop over all episodes
@@ -335,7 +335,8 @@ class AC_Network():
                                                      rolling_log_probs) * self.discount[:(self.rollout - 1)], axis=1)
 
                         # Compute mean of policy loss per episode
-                        policy_loss_mean = tf.reduce_mean(policy_loss)
+                        policy_loss_mean = tf.reduce_mean(policy_loss) * tf.cast(self.lengths_episodes[i],
+                                                                                 dtype=tf.float32)
 
                         return i + 1, ta.write(i, policy_loss), ta_mean.write(i, policy_loss_mean)
 
@@ -346,40 +347,27 @@ class AC_Network():
 
                 # Combine both loss parts
                 tf_loss_map = tf.map_fn(lambda i: tf.reduce_mean(
-                                                    0.5 * tf.square(value_loss_array.gather([i]) + policy_loss_array.gather([i]))),
+                                                    0.5 * tf.square(value_loss_array.gather([i]) + policy_loss_array.gather([i]))) *
+                                                  tf.cast(self.lengths_episodes[i],
+                                                            dtype=tf.float32),
                                         tf.range(length_batch), dtype=tf.float32)
 
                 # Total loss via weighted sum depending on the length of the different episodes
-                self.loss = tf.reduce_mean(tf_loss_map * tf.cast(self.lengths_episodes, dtype=tf.float32)) / tf.cast(
+                self.loss = tf.reduce_sum(tf_loss_map) / tf.cast(
                     tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
 
                 # Mean value of value loss
                 self.value_loss = tf.reduce_sum(tf.map_fn(lambda i: value_loss_mean_array.gather([i]),
                                                           tf.range(length_batch),
-                                                          dtype=tf.float32) * tf.cast(self.lengths_episodes,
-                                                                                      dtype=tf.float32)) / tf.cast(
-                    tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
+                                                          dtype=tf.float32)) / \
+                                  tf.cast(tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
 
                 # Mean value of policy loss
                 self.policy_loss = tf.reduce_sum(tf.map_fn(lambda i: policy_loss_array_mean.gather([i]),
                                                            tf.range(length_batch),
-                                                           dtype=tf.float32) * tf.cast(self.lengths_episodes,
-                                                                                       dtype=tf.float32)) / tf.cast(
+                                                           dtype=tf.float32) ) / tf.cast(
                     tf.reduce_sum(self.lengths_episodes), dtype=tf.float32)
 
-            if self.scope == "worker_0":
-
-                tf.summary.scalar('policy_loss_' + self.scope,
-                                  self.policy_loss)
-                tf.summary.scalar('value_loss_' + self.scope,
-                                  self.value_loss)
-                #tf.summary.histogram('log_probs' + scope,
-                #                     self.log_probs)
-                tf.summary.scalar('loss_' + self.scope,
-                                  self.loss)
-
-            # ToDo: Apply different Learning Rates to value and policy parts
-            trainer_value =  tf.train.AdamOptimizer(learning_rate = 0.5 * 0.0007)
 
             # Get gradients from local network using local losses
             local_vars_policy = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope + "/policy_net")
@@ -398,8 +386,81 @@ class AC_Network():
             global_vars_pol = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global' + "/policy_net")
             global_vars_val = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global' + "/value_net")
 
-            self.apply_grads_pol = trainer.apply_gradients(zip(grads_pol, global_vars_pol))
-            self.apply_grads_val = trainer_value.apply_gradients(zip(grads_val, global_vars_val))
+            self.apply_grads_pol = self.trainer_pol.apply_gradients(zip(grads_pol, global_vars_pol))
+            self.apply_grads_val = self.trainer_val.apply_gradients(zip(grads_val, global_vars_val))
+
+
+        # Compute KL-Divergence
+        with tf.variable_scope("KL_Divergence"):
+
+            # Feed in logits (probabilities) of old policy
+            self.oldPolicy = tf.placeholder(shape=[None, None, a_size], dtype=tf.float32)
+
+            self.sum_diff = tf.reduce_sum(self.policy - self.oldPolicy)
+            # Compute kl-Divergence of old and new policy
+            self.kl_divergence, self.kl_divergence_sum = self.calculate_kl_divergence(self.policy,
+                                                              self.oldPolicy,
+                                                              self.lengths_episodes)
+
+        # Worker_0 is our "Chief worker" and therefore creates the summary
+        if self.scope == "worker_0":
+
+            tf.summary.scalar('policy_loss_' + self.scope,
+                              self.policy_loss)
+            tf.summary.scalar('value_loss_' + self.scope,
+                              self.value_loss)
+            tf.summary.scalar('loss_' + self.scope,
+                              self.loss)
+            tf.summary.scalar('learning_rate_' + self.scope,
+                              self.lr)
+            tf.summary.scalar("reward_" + self.scope,
+                              tf.reduce_mean(tf.reduce_sum(self.rewards, axis=1)))
+
+    # Calculate KL-Divergence based on the old and new policy
+    def calculate_kl_divergence(self, old_policy, new_policy, episode_lengths):
+
+        # Get amount of batches
+        length_batch = tf.shape(old_policy)[0]
+
+        # Compute kl_divergence based on episode lengths relevant log probs
+        kl_divergence_array_init = tf.TensorArray(tf.float32, size=length_batch)
+        # Tensorarray to hold mean of kl_divergence per episodes rollouts
+        kl_divergence_mean_array_init = tf.TensorArray(tf.float32,
+                                                       size=length_batch,
+                                                       clear_after_read = False)
+
+        def compute_kl_divergence(i, ta, ta_sum):
+            log_old_policy = tf.log(old_policy[i][:episode_lengths[i]])
+            log_new_policy = tf.log(new_policy[i][:episode_lengths[i]])
+            kl_divergence_step_wise = tf.reduce_sum(old_policy[i][:episode_lengths[i]] * (log_old_policy - log_new_policy),
+                                             axis = 1)
+            kl_divergence_sum = tf.reduce_mean(kl_divergence_step_wise)
+            return i + 1, ta.write(i, kl_divergence_step_wise), ta_sum.write(i, kl_divergence_sum)
+
+            # Loop over all episodes
+
+        _, kl_divergence_array, kl_divergence_mean_array = tf.while_loop(
+            lambda i, ta, ta_mean: i < length_batch, compute_kl_divergence,
+            [0, kl_divergence_array_init, kl_divergence_mean_array_init])
+
+        kl_divergence_sum = tf.reduce_sum(tf.map_fn(lambda i: kl_divergence_mean_array.gather([i]),
+                                        tf.range(length_batch),
+                                        dtype=tf.float32))
+
+        # Compute weighted average of the KL-Divergence of all episodes
+        kl_divergence = tf.reduce_sum(tf.map_fn(lambda i: kl_divergence_mean_array.gather([i]) * tf.cast(episode_lengths[i],
+                                                                               dtype=tf.float32),
+                                                   tf.range(length_batch),
+                                                   dtype=tf.float32) ) / tf.cast(
+            tf.reduce_sum(episode_lengths), dtype=tf.float32)
+
+        return kl_divergence, kl_divergence_sum
+
+    # Set new learning rate based in KL-Divergence
+    def set_opt_param(self, sess, new_lr=None):
+        if new_lr is not None:
+            sess.run(self.lr_update, feed_dict={self.new_learning_rate: new_lr})
+        return sess.run([self.lr])
 
     # Noisy layers implementation is based on
     # https://arxiv.org/abs/1706.10295

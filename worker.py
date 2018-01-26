@@ -82,15 +82,14 @@ def unpack_episode(sampled_eps):
 
 
 class Worker():
-    def __init__(self, name, s_size, a_size, network_config, trainer, global_episodes,
+    def __init__(self, name, s_size, a_size, network_config, learning_rate, global_episodes,
                  env_name, number_envs = 1,
-                 tau = 0.0, rollout = 10, method = "A3C"):
+                 tau = 0.0, rollout = 10, method = "A3C", update_learning_rate_ = True):
 
         self.name = "worker_" + str(name)
         self.method = method
         print(self.method)
         self.number = name
-        self.trainer = trainer
         self.global_episodes = global_episodes
         self.increment = self.global_episodes.assign_add(1)
         self.episode_rewards = []
@@ -102,7 +101,8 @@ class Worker():
             self.replay_buffer = ReplayBuffer()
 
         # Create the local copy of the network and the tensorflow op to copy global parameters to local network
-        self.local_AC = AC_Network(s_size, a_size, self.name, trainer, network_config, tau, rollout, self.method)
+        self.local_AC = AC_Network(s_size, a_size, self.name, network_config, learning_rate= learning_rate,
+                                   tau = tau, rollout= rollout, method= self.method)
         self.update_local_ops = update_target_graph('global', self.name)
 
         # Set gym environment
@@ -115,6 +115,10 @@ class Worker():
         self.policy_layers = len(network_config["policy_config"]["layers"])
         self.noisy_value = network_config["value_config"]["noise_dist"]
         self.value_layers = len(network_config["value_config"]["layers"])
+
+        # Desired KL-Divergence to update learning rate
+        self.desired_kl = 0.002
+        self.update_learning_rate_ = update_learning_rate_
 
     def train(self, states, rewards, actions, values, terminal, sess, gamma, r, merged_summary):
 
@@ -177,28 +181,30 @@ class Worker():
                      self.local_AC.actions: actions,
                      self.local_AC.advantages: padded_discounted_advantages,
                      self.local_AC.state_in[0]: rnn_state[0],
-                     self.local_AC.state_in[1]: rnn_state[1]}
+                     self.local_AC.state_in[1]: rnn_state[1],
+                     self.local_AC.rewards: rewards}
 
         summary = None
         if self.name == "worker_0":
-            summary, v_l, p_l, e_l, g_n, v_n, _ = sess.run([merged_summary, self.local_AC.value_loss,
-                                                   self.local_AC.policy_loss,
-                                                   self.local_AC.entropy,
-                                                   self.local_AC.grad_norms,
-                                                   self.local_AC.var_norms,
-                                                   self.local_AC.apply_grads],
-                                                  feed_dict=feed_dict)
+            summary, v_l, p_l, e_l, g_n, v_n, _, logits = sess.run([merged_summary, self.local_AC.value_loss,
+                                                                   self.local_AC.policy_loss,
+                                                                   self.local_AC.entropy,
+                                                                   self.local_AC.grad_norms,
+                                                                   self.local_AC.var_norms,
+                                                                   self.local_AC.apply_grads,
+                                                                   self.local_AC.policy],
+                                                                  feed_dict=feed_dict)
         else:
-            v_l, p_l, e_l, g_n, v_n, _, len_ = sess.run([self.local_AC.value_loss,
+            v_l, p_l, e_l, g_n, v_n, _, logits = sess.run([self.local_AC.value_loss,
                                                             self.local_AC.policy_loss,
                                                             self.local_AC.entropy,
                                                             self.local_AC.grad_norms,
                                                             self.local_AC.var_norms,
                                                             self.local_AC.apply_grads,
-                                                            self.local_AC.lengths_episodes],
+                                                            self.local_AC.policy],
                                                            feed_dict=feed_dict)
 
-        return v_l , p_l , e_l , g_n, v_n, summary
+        return v_l , p_l , e_l , g_n, v_n, summary, logits
 
     # Training operations PCL
     def train_pcl(self, episodes, gamma, sess, merged_summary):
@@ -234,11 +240,12 @@ class Worker():
                 self.local_AC.state_in[0]: c_init,
                 self.local_AC.state_in[1]: h_init
             }
-            summary, v_l, p_l, total_loss, _, _ = sess.run([merged_summary, self.local_AC.value_loss,
+            summary, v_l, p_l, total_loss, _, _, logits = sess.run([merged_summary, self.local_AC.value_loss,
                                                          self.local_AC.policy_loss,
                                                          self.local_AC.loss,
                                                          self.local_AC.apply_grads_pol,
-                                                         self.local_AC.apply_grads_val],
+                                                         self.local_AC.apply_grads_val,
+                                                         self.local_AC.policy],
                                                         feed_dict=feed_dict_)
         else:
             # Perform training on one episode batch
@@ -252,15 +259,62 @@ class Worker():
                 self.local_AC.state_in[1]: h_init
             }
 
-            v_l, p_l, total_loss, _, _ = sess.run([self.local_AC.value_loss,
+            v_l, p_l, total_loss, _, _, logits = sess.run([self.local_AC.value_loss,
                                                 self.local_AC.policy_loss,
                                                 self.local_AC.loss,
                                                 self.local_AC.apply_grads_pol,
-                                                self.local_AC.apply_grads_val],
+                                                self.local_AC.apply_grads_val,
+                                                self.local_AC.policy],
                                                feed_dict=feed_dict_)
 
-        return r_ep, v_ep, summary
+        return r_ep, v_ep, summary, logits
 
+    # Calculate KL Divergence in order to update the learning rate
+    def calculate_kl_divergence(self, old_logits, states, sess):
+
+        if self.method == "A3C":
+            batch_size = len(states)
+            s_ep = states
+        elif self.method == "PCL":
+            batch_size = len(states)
+            # Get states to obtain logits of updated policy
+            _, s_ep, _, _, _ = unpack_episode(states)
+
+        # Set rnn_state based on the amount of episodes
+        # Dynamic state initialization
+        c_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
+        h_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
+
+        feed_dict_ = {
+            self.local_AC.oldPolicy: old_logits,
+            self.local_AC.inputs: s_ep,
+            self.local_AC.state_in[0]: c_init,
+            self.local_AC.state_in[1]: h_init
+        }
+
+        # Run Tensorgraph with old and new logits as input in order to compute the KL-Divergence
+        kl_divergence = sess.run(self.local_AC.kl_divergence, feed_dict_)
+
+        return kl_divergence
+
+    # Function to update learning rate based on KL-Divergence
+    def update_learning_rate(self, kl_divergence, sess):
+
+        max_lr = 0.1
+        min_lr = 0.000001
+
+        act_lr = sess.run(self.local_AC.lr)
+        if kl_divergence < self.desired_kl / 4:
+            new_lr = min(max_lr, act_lr * 1.5)
+            sess.run(self.local_AC.lr_update, feed_dict={self.local_AC.new_learning_rate: new_lr})
+            #print(sess.run(self.local_AC.lr))
+        elif kl_divergence > self.desired_kl * 4:
+            new_lr = max(min_lr, act_lr / 1.5)
+            sess.run(self.local_AC.lr_update, feed_dict={self.local_AC.new_learning_rate: new_lr})
+            #print(sess.run(self.local_AC.lr))
+
+
+    # Act on current policy
     def act(self, state, rnn_state, sess):
 
         action_dist, value, rnn_state = sess.run([self.local_AC.policy, self.local_AC.value, self.local_AC.state_out],

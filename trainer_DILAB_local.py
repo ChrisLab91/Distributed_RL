@@ -58,7 +58,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         ENV_NAME = 'CartPole-v0'  # Discrete (4, 2)
         STATE_DIM = 4
         ACTION_DIM = 2
-        NUM_ENVS = 3
+        NUM_ENVS = 4
 
         # Network configuration
         network_config = dict(shared=True,
@@ -70,7 +70,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                 noise_dist=None))
 
         # Learning rate
-        LEARNING_RATE = 0.0005
+        LEARNING_RATE = 0.05
+        UPDATE_LEARNING_RATE = True
         # Discount rate for advantage estimation and reward discounting
         GAMMA = 0.99
 
@@ -94,13 +95,13 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                       ps_strategy=U.greedy_ps_strategy(ps_tasks=num_ps))):
 
             global_episodes = tf.Variable(0, dtype=tf.int32, name='global_episodes', trainable=False)
-            trainer = tf.train.AdamOptimizer(learning_rate=LEARNING_RATE)
-            master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', None, network_config, tau=TAU, rollout=ROLLOUT,
+            master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', network_config, learning_rate=None, tau=TAU, rollout=ROLLOUT,
                                         method=METHOD)  # Generate global network
 
             with tf.device(worker_device):
-                worker = Worker(TASK_ID, STATE_DIM, ACTION_DIM, network_config, trainer, global_episodes,
-                                      ENV_NAME, number_envs =  NUM_ENVS, tau = TAU, rollout= ROLLOUT, method=METHOD)
+                worker = Worker(TASK_ID, STATE_DIM, ACTION_DIM, network_config, LEARNING_RATE, global_episodes,
+                                ENV_NAME, number_envs =  NUM_ENVS, tau = TAU, rollout= ROLLOUT, method=METHOD,
+                                update_learning_rate_=UPDATE_LEARNING_RATE)
 
         # Get summary information
         if worker.name == "worker_0":
@@ -139,7 +140,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
             while not sess.should_stop():
 
-                sess.run(worker.update_local_ops)
+
                 worker.episode_values = []
                 worker.episode_reward = []
 
@@ -205,17 +206,21 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         sampled_episodes = worker.replay_buffer.sample(episode_count=len(worker.env))
 
                         # Train PCL agent
-                        r_ep, v_ep, summary = worker.train_pcl(sampled_episodes, gamma, sess, merged_summary)
+                        r_ep, v_ep, summary, logits = worker.train_pcl(sampled_episodes, gamma, sess, merged_summary)
+                        # Update global network
+                        sess.run(worker.update_local_ops)
 
-                        # ToDo: After the network has been updated update the learning rate based on
-                        # ToDO: the KL-Divergence
-                        # ToDo: feed sampled_episodes -> Receive log_probs and also feed log_probs before the update
-                        # ToDo: update_learning_rate(kl_divergence) --> receive new learning rate
+                        # Update learning rate based on calculated KL Divergence
+                        if worker.update_learning_rate_:
+                            # Calculate KL-Divergence of updated policy and policy before update
+                            kl_divergence = worker.calculate_kl_divergence(logits, sampled_episodes,sess)
+                            # Perform learning rate update based on KL-Divergence
+                            worker.update_learning_rate(kl_divergence, sess)
 
                         # Update summary information
                         train_steps = train_steps + 1
                         if worker.name == "worker_0":
-                            writer.add_summary(summary, train_steps)
+                           writer.add_summary(summary, train_steps)
 
                         # Write add. summary information
                         episode_reward_offline = np.mean(np.sum(r_ep, axis=1))
@@ -247,17 +252,24 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                      worker.local_AC.state_in[0]: rnn_state[0],
                                                      worker.local_AC.state_in[1]: rnn_state[1]})
 
-                            v_l, p_l, e_l, g_n, v_n, summary = worker.train(worker.episode_states_train,
+                            v_l, p_l, e_l, g_n, v_n, summary, logits = worker.train(worker.episode_states_train,
                                                                           worker.episode_reward_train,
                                                                           worker.episode_actions_train,
                                                                           worker.episode_values_train,
                                                                           worker.episode_done_train,
                                                                           sess, gamma, np.squeeze(v1), merged_summary)
 
-                            # ToDo: After the network has been updated update the learning rate based on
-                            # ToDO: the KL-Divergence
-                            # ToDo: feed sampled_episodes -> Receive log_probs and also feed log_probs before the update
-                            # ToDo: update_learning_rate(kl_divergence) --> receive new learning rate
+                            if worker.env.all_done():
+                                # Update global network
+                                sess.run(worker.update_local_ops)
+
+                                # Update learning rate based on calculated KL Divergence
+                                if worker.update_learning_rate_:
+                                    # Calculate KL-Divergence of updated policy and policy before update
+                                    kl_divergence = worker.calculate_kl_divergence(logits, worker.episode_states_train, sess)
+                                    # Perform learning rate update based on KL-Divergence
+                                    if not np.isnan(kl_divergence):
+                                        worker.update_learning_rate(kl_divergence, sess)
 
                             train_steps = train_steps + 1
 
