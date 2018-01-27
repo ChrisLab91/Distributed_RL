@@ -80,37 +80,93 @@ class AC_Network():
         """
         shared_network_kind = self.shared_config["kind"]
 
-        if shared_network_kind == "RNN":
+        def length(sequence):
+            used = tf.sign(tf.reduce_max(tf.abs(sequence), 2))
+            length = tf.reduce_sum(used, 1)
+            length = tf.cast(length, tf.int32)
+            return length
 
-            def length(sequence):
-                used = tf.sign(tf.reduce_max(tf.abs(sequence), 2))
-                length = tf.reduce_sum(used, 1)
-                length = tf.cast(length, tf.int32)
-                return length
-            self.lengths_episodes = length(self.inputs)
+        self.lengths_episodes = tf.placeholder(shape=[None], dtype=tf.int32)
+        #shared_network_kind = "CNN+RNN"
+
+        if "CNN" in shared_network_kind:
+
+            self.image = tf.reshape(self.inputs, shape=[tf.shape(self.inputs)[0] * tf.shape(self.inputs)[1], 84, 84, 1]) 
+
+            max_pool_size = [2, 2]
+
+            with slim.arg_scope([slim.conv2d], padding='VALID', 
+                                activation_fn=tf.nn.relu):
+
+              net = slim.conv2d(self.image, 32, [5, 5], scope='conv1')
+              net = slim.max_pool2d(net, max_pool_size, scope='pool1')
+
+              net = slim.conv2d(net, 32, [4, 4], scope='conv2')
+              net = slim.max_pool2d(net, max_pool_size, scope='pool2')
+
+              net = slim.conv2d(net, 64, [3, 3], scope='conv3')
+
+
+            reshaped_net = tf.reshape(net, shape=[tf.shape(self.inputs)[0], tf.shape(self.inputs)[1], 16*16*64]) 
+
+            if len(shared_network_kind) == 1:
+
+                hidden = slim.fully_connected(reshaped_net, shared_network_kind["cnn_output_size"], activation_fn=tf.nn.elu)
+                return hidden
+
+            else:
+
+                hidden = slim.fully_connected(reshaped_net, shared_network_kind["lstm_cell_units"], activation_fn=tf.nn.elu)
+                rnn_in = hidden
+
+        if "Dense" in shared_network_kind:
+
+            layers = shared_network_kind["dense_layers"]
+            
+            net = slim.fully_connected(self.inputs, layers[0],
+                                         activation_fn=None,
+                                         weights_initializer=normalized_columns_initializer(1.0),
+                                         biases_initializer=None)
+            for units in layers[1:]:
+                net = slim.fully_connected(net, units,
+                                           activation_fn=None,
+                                           weights_initializer=normalized_columns_initializer(1.0),
+                                           biases_initializer=None)
+            if len(shared_network_kind) == 1:
+
+                return net
+
+            else:
+        
+                rnn_in = net
+
+        if "RNN" in shared_network_kind:
 
             # Size of LSTM layer
-            self.cell_units = self.shared_config["Cell_Units"]
+            self.cell_units = self.shared_config["lstm_cell_units"]
             # Recurrent network for temporal dependencies
             lstm_cell = tf.contrib.rnn.BasicLSTMCell(self.cell_units, state_is_tuple=True)
             # Hidden states of LSTM cell
             c_in = tf.placeholder(tf.float32, [None, lstm_cell.state_size.c])
             h_in = tf.placeholder(tf.float32, [None, lstm_cell.state_size.h])
             self.state_in = [c_in, h_in]
-            rnn_in = self.inputs
             state_in = tf.contrib.rnn.LSTMStateTuple(c_in, h_in)
+
+            if len(shared_network_kind) == 1:
+
+                rnn_in = self.inputs
+
             lstm_outputs, lstm_state = tf.nn.dynamic_rnn(
                 lstm_cell, rnn_in,
                 initial_state=state_in,
                 time_major=False,
-                sequence_length=length(self.inputs))
+                sequence_length=self.lengths_episodes)
             # Current hidden States that are propagated
             self.state_out = lstm_state
             # Output of Network propagated on to the value and policy heads
             self.rnn_out = lstm_outputs
 
-        else:
-            self.rnn_out = None
+            return self.rnn_out
 
         return self.rnn_out
 

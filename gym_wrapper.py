@@ -104,7 +104,6 @@ class GymWrapper(object):
     for i, (_, _, done, _) in enumerate(outputs):
       self.dones[i] = self.dones[i] or done
     obs, reward, done, tt = zip(*outputs)
-    #obs = [list(oo) for oo in zip(*obs)]
     return [obs, reward, done, tt]
 
   def get_one(self):
@@ -122,7 +121,8 @@ class GymWrapper(object):
           if typ == spaces.discrete:
               obs.append(np.zeros(batch_size))
           elif typ == spaces.box:
-              obs.append(np.zeros([batch_size, dim]))
+              obs_out_dim = (batch_size, ) + self.obs_space.shape
+              obs.append(np.zeros(obs_out_dim))
 
       if batched:
           return obs

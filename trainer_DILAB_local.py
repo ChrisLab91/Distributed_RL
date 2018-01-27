@@ -5,6 +5,7 @@ import tensorflow.contrib.slim as slim
 import scipy.signal
 import gym
 import os
+import os
 import threading
 import multiprocessing
 import tensorflow as tf
@@ -55,15 +56,18 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         # Get all required Paramters
 
         # Gym environment
-        ENV_NAME = 'CartPole-v0'  # Discrete (4, 2)
-        STATE_DIM = 4
-        ACTION_DIM = 2
-        NUM_ENVS = 4
+        ENV_NAME = 'MsPacman-v0'  # Discrete (4, 2)
+        STATE_DIM = 7056
+        ACTION_DIM = 9
+        NUM_ENVS = 3
+        PREPROCESSING = True
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind='RNN',
-                                                 Cell_Units=16),
+                              shared_config=dict(kind=["RNN"],
+                                                 cnn_output_size=20,
+                                                 dense_layers=[16, 16],
+                                                 lstm_cell_units=16),
                               policy_config=dict(layers=[ACTION_DIM],
                                                  noise_dist="independent"),
                               value_config=dict(layers=[1],
@@ -77,7 +81,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Summary LOGDIR
         # LOG_DIR = '~/A3C/MyDistTest/'
-        LOG_DIR = '/home/adrian/Schreibtisch/Uni/Data-Innovation-Lab/DILAB/tensorflowlogs'
+        LOG_DIR = os.getcwd() + 'tensorflowlogs'
 
         # Choose RL method (A3C, PCL)
         METHOD = "PCL"
@@ -101,7 +105,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             with tf.device(worker_device):
                 worker = Worker(TASK_ID, STATE_DIM, ACTION_DIM, network_config, LEARNING_RATE, global_episodes,
                                 ENV_NAME, number_envs =  NUM_ENVS, tau = TAU, rollout= ROLLOUT, method=METHOD,
-                                update_learning_rate_=UPDATE_LEARNING_RATE)
+                                update_learning_rate_=UPDATE_LEARNING_RATE, preprocessing_state = PREPROCESSING)
 
         # Get summary information
         if worker.name == "worker_0":
@@ -160,6 +164,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                 # Restart environment
                 s = worker.env.reset()
+                if PREPROCESSING:
+                    s = U.process_frame(s)
 
                 # Set initial rnn state based on number of episodes
                 c_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
@@ -181,7 +187,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                     worker.replay_buffer.add(episodes)
 
                     # Get rewards and value estimates of current sample
-                    _, _, r_ep, v_ep, _ = unpack_episode(episodes)
+                    _, _, r_ep, v_ep, _ , _ = unpack_episode(episodes)
 
                     episode_values = np.mean(np.sum(v_ep, axis=1))
                     episode_reward = np.mean(np.sum(r_ep, axis=1))
@@ -207,6 +213,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                         # Train PCL agent
                         r_ep, v_ep, summary, logits = worker.train_pcl(sampled_episodes, gamma, sess, merged_summary)
+                        print("PRINTED")
                         # Update global network
                         sess.run(worker.update_local_ops)
 
@@ -237,6 +244,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         act_ = [np.argmax(a_) for a_ in a]
                         # Sample new state and reward from environment
                         s2, r, terminal, info = worker.env.step(act_)
+                        if PREPROCESSING:
+                            s2 = U.process_frame(s2)
+
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
                         worker.add_to_batch(s, r, a, v, terminal)

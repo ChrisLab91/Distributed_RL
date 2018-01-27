@@ -8,6 +8,7 @@ import multiprocessing
 import tensorflow as tf
 import random
 import gym_wrapper
+import util as U
 
 from ac_network import AC_Network
 from replay_buffer import ReplayBuffer
@@ -54,7 +55,7 @@ def norm(x, upper, lower=0.):
 def unpack_episode(sampled_eps):
 
     # Get max len of rollout episodes to perform padding
-    lens_seqs = [len(ep["actions"][0]) for ep in sampled_eps]
+    lens_seqs = [ep["path_length"] for ep in sampled_eps]
     max_len = max(lens_seqs)
     min_len = min(lens_seqs)
 
@@ -78,13 +79,13 @@ def unpack_episode(sampled_eps):
                      for ep in sampled_eps]
     rewards_start = np.vstack(rewards_start)
 
-    return actions_start, states_start, rewards_start, values_start, min_len
+    return actions_start, states_start, rewards_start, values_start, min_len, lens_seqs
 
 
 class Worker():
     def __init__(self, name, s_size, a_size, network_config, learning_rate, global_episodes,
                  env_name, number_envs = 1,
-                 tau = 0.0, rollout = 10, method = "A3C", update_learning_rate_ = True):
+                 tau = 0.0, rollout = 10, method = "A3C", update_learning_rate_ = True, preprocessing_state = False):
 
         self.name = "worker_" + str(name)
         self.method = method
@@ -109,6 +110,7 @@ class Worker():
         self.env = gym_wrapper.GymWrapper(env_name, count = number_envs)
         self.a_size = a_size
         self.s_size = s_size
+        self.preprocessing_state = preprocessing_state
 
         # Get Noisy Net Information if applied
         self.noisy_policy = network_config["policy_config"]["noise_dist"]
@@ -211,7 +213,13 @@ class Worker():
 
         # Train on sampled episodes
 
-        a_ep, s_ep, r_ep, v_ep, min_len = unpack_episode(episodes)
+        a_ep, s_ep, r_ep, v_ep, min_len, lens_seqs = unpack_episode(episodes)
+        print(np.shape(a_ep))
+        print(np.shape(s_ep))
+        print(np.shape(r_ep))
+        print("lens_seqs")
+        print(np.shape(lens_seqs))
+        print(lens_seqs)
 
         rollout = self.local_AC.rollout_pcl
         while rollout > min_len:
@@ -238,7 +246,8 @@ class Worker():
                 self.local_AC.discount: discount,
                 self.local_AC.rollout: rollout,
                 self.local_AC.state_in[0]: c_init,
-                self.local_AC.state_in[1]: h_init
+                self.local_AC.state_in[1]: h_init,
+                self.local_AC.lengths_episodes: lens_seqs
             }
             summary, v_l, p_l, total_loss, _, _, logits = sess.run([merged_summary, self.local_AC.value_loss,
                                                          self.local_AC.policy_loss,
@@ -256,7 +265,8 @@ class Worker():
                 self.local_AC.discount: discount,
                 self.local_AC.rollout: rollout,
                 self.local_AC.state_in[0]: c_init,
-                self.local_AC.state_in[1]: h_init
+                self.local_AC.state_in[1]: h_init,
+                self.local_AC.lengths_episodes: lens_seqs
             }
 
             v_l, p_l, total_loss, _, _, logits = sess.run([self.local_AC.value_loss,
@@ -278,7 +288,7 @@ class Worker():
         elif self.method == "PCL":
             batch_size = len(states)
             # Get states to obtain logits of updated policy
-            _, s_ep, _, _, _ = unpack_episode(states)
+            _, s_ep, _, _, _, lens_seqs = unpack_episode(states)
 
         # Set rnn_state based on the amount of episodes
         # Dynamic state initialization
@@ -289,7 +299,8 @@ class Worker():
             self.local_AC.oldPolicy: old_logits,
             self.local_AC.inputs: s_ep,
             self.local_AC.state_in[0]: c_init,
-            self.local_AC.state_in[1]: h_init
+            self.local_AC.state_in[1]: h_init,
+            self.local_AC.lengths_episodes: lens_seqs
         }
 
         # Run Tensorgraph with old and new logits as input in order to compute the KL-Divergence
@@ -315,12 +326,22 @@ class Worker():
 
 
     # Act on current policy
-    def act(self, state, rnn_state, sess):
+    def act(self, state, rnn_state, lens_seqs, sess):
+
+        # print("state")
+        # print(state[0].shape)
+
+        # print("self.local_AC.inputs")
+        # print(self.local_AC.inputs)
+
+        # print("self.local_AC.state_out")
+        # print(self.local_AC.state_out)
 
         action_dist, value, rnn_state = sess.run([self.local_AC.policy, self.local_AC.value, self.local_AC.state_out],
                                         feed_dict={self.local_AC.inputs: state,
                                                    self.local_AC.state_in[0]: rnn_state[0],
-                                                   self.local_AC.state_in[1]: rnn_state[1]})
+                                                   self.local_AC.state_in[1]: rnn_state[1],
+                                                   self.local_AC.lengths_episodes: lens_seqs})
 
         # Chose action with largest probability
         a0 = [weighted_pick(a,1) for a in action_dist]  # Use stochastic distribution sampling
@@ -527,7 +548,6 @@ class Worker():
 
         # Episode count will correspond to different independent envs
         for i in range(episode_count):
-
             # Reset rnn_state for every iteration
             s = initial_state[i]
             states = []
@@ -541,9 +561,14 @@ class Worker():
 
             # Sample one episode
             while path_length < max_path_length:
-                s_reshape = np.reshape(s, newshape=[1,1,self.s_size])
-                a, v, rnn_state_rolling, agent_info = self.act(s_reshape, rnn_state_rolling, sess)
+                s_reshape = np.reshape(s, newshape=[1,1,np.shape(initial_state)[2]])
+                #s_reshape = np.expand_dims(s, 0)
+
+                a, v, rnn_state_rolling, agent_info = self.act(s_reshape, rnn_state_rolling, [1], sess)
                 next_s, r, d, env_info = self.env.envs[i].step([np.argmax(a_) for a_ in a][0])
+                if self.preprocessing_state:
+                    next_s = np.expand_dims(next_s, 0)
+                    next_s = U.process_frame(next_s)
                 states.append(np.squeeze(s_reshape))
                 rewards.append(r)
                 values.append(np.squeeze(v))
@@ -552,6 +577,8 @@ class Worker():
                 env_infos.append(env_info)
                 path_length += 1
                 if d:
+                    print("PATH_LENGTH")
+                    print(path_length)
                     break
                 s = next_s
             # Append sampled episode
@@ -562,7 +589,8 @@ class Worker():
                                 rewards=np.expand_dims(np.array(rewards),0),
                                 values = np.expand_dims(np.reshape(np.array(values), newshape= (len(np.array(values)))), 0),
                                 agent_infos=np.expand_dims(np.array(agent_infos),0),
-                                env_infos=np.expand_dims(np.array(env_infos),0)
+                                env_infos=np.expand_dims(np.array(env_infos),0),
+                                path_length=int(path_length)
                             ))
         return episodes
 
