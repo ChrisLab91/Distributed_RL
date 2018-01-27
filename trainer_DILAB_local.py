@@ -57,17 +57,17 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Gym environment
         ENV_NAME = 'MsPacman-v0'  # Discrete (4, 2)
-        STATE_DIM = 7056
+        STATE_DIM =  7056
         ACTION_DIM = 9
         NUM_ENVS = 3
         PREPROCESSING = True
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["RNN"],
+                              shared_config=dict(kind=["CNN", "RNN"],
                                                  cnn_output_size=20,
                                                  dense_layers=[16, 16],
-                                                 lstm_cell_units=16),
+                                                 lstm_cell_units=128),
                               policy_config=dict(layers=[ACTION_DIM],
                                                  noise_dist="independent"),
                               value_config=dict(layers=[1],

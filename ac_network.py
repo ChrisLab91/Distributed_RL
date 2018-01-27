@@ -111,17 +111,17 @@ class AC_Network():
 
             if len(shared_network_kind) == 1:
 
-                hidden = slim.fully_connected(reshaped_net, shared_network_kind["cnn_output_size"], activation_fn=tf.nn.elu)
+                hidden = slim.fully_connected(reshaped_net, self.shared_config["cnn_output_size"], activation_fn=tf.nn.elu)
                 return hidden
 
             else:
 
-                hidden = slim.fully_connected(reshaped_net, shared_network_kind["lstm_cell_units"], activation_fn=tf.nn.elu)
+                hidden = slim.fully_connected(reshaped_net, self.shared_config["lstm_cell_units"], activation_fn=tf.nn.elu)
                 rnn_in = hidden
 
         if "Dense" in shared_network_kind:
 
-            layers = shared_network_kind["dense_layers"]
+            layers = self.shared_config["dense_layers"]
             
             net = slim.fully_connected(self.inputs, layers[0],
                                          activation_fn=None,
