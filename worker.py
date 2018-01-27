@@ -184,7 +184,8 @@ class Worker():
                      self.local_AC.advantages: padded_discounted_advantages,
                      self.local_AC.state_in[0]: rnn_state[0],
                      self.local_AC.state_in[1]: rnn_state[1],
-                     self.local_AC.rewards: rewards}
+                     self.local_AC.rewards: rewards,
+                     self.local_AC.lengths_episodes: lengths_rollouts}
 
         summary = None
         if self.name == "worker_0":
@@ -214,12 +215,7 @@ class Worker():
         # Train on sampled episodes
 
         a_ep, s_ep, r_ep, v_ep, min_len, lens_seqs = unpack_episode(episodes)
-        print(np.shape(a_ep))
-        print(np.shape(s_ep))
-        print(np.shape(r_ep))
-        print("lens_seqs")
-        print(np.shape(lens_seqs))
-        print(lens_seqs)
+
 
         rollout = self.local_AC.rollout_pcl
         while rollout > min_len:
@@ -280,10 +276,11 @@ class Worker():
         return r_ep, v_ep, summary, logits
 
     # Calculate KL Divergence in order to update the learning rate
-    def calculate_kl_divergence(self, old_logits, states, sess):
+    def calculate_kl_divergence(self, old_logits, states, sess, dones=None):
 
         if self.method == "A3C":
             batch_size = len(states)
+            lens_seqs = [int(-1 * sum(done - 1)) for done in dones]
             s_ep = states
         elif self.method == "PCL":
             batch_size = len(states)
@@ -328,14 +325,6 @@ class Worker():
     # Act on current policy
     def act(self, state, rnn_state, lens_seqs, sess):
 
-        # print("state")
-        # print(state[0].shape)
-
-        # print("self.local_AC.inputs")
-        # print(self.local_AC.inputs)
-
-        # print("self.local_AC.state_out")
-        # print(self.local_AC.state_out)
 
         action_dist, value, rnn_state = sess.run([self.local_AC.policy, self.local_AC.value, self.local_AC.state_out],
                                         feed_dict={self.local_AC.inputs: state,
@@ -577,8 +566,6 @@ class Worker():
                 env_infos.append(env_info)
                 path_length += 1
                 if d:
-                    print("PATH_LENGTH")
-                    print(path_length)
                     break
                 s = next_s
             # Append sampled episode

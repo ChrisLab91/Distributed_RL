@@ -84,7 +84,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR = os.getcwd() + 'tensorflowlogs'
 
         # Choose RL method (A3C, PCL)
-        METHOD = "PCL"
+        METHOD = "A3C"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -213,7 +213,6 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                         # Train PCL agent
                         r_ep, v_ep, summary, logits = worker.train_pcl(sampled_episodes, gamma, sess, merged_summary)
-                        print("PRINTED")
                         # Update global network
                         sess.run(worker.update_local_ops)
 
@@ -238,7 +237,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                     while not worker.env.all_done():
 
                         # Get preferred action distribution
-                        a, v, rnn_state, _ = worker.act(s, rnn_state, sess)
+                        dummy_lengths = np.ones(len(worker.env))
+                        a, v, rnn_state, _ = worker.act(s, rnn_state, dummy_lengths, sess)
 
                         # Get action for every environment
                         act_ = [np.argmax(a_) for a_ in a]
@@ -260,7 +260,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                             v1 = sess.run([worker.local_AC.value],
                                           feed_dict={worker.local_AC.inputs: s2,
                                                      worker.local_AC.state_in[0]: rnn_state[0],
-                                                     worker.local_AC.state_in[1]: rnn_state[1]})
+                                                     worker.local_AC.state_in[1]: rnn_state[1],
+                                                     worker.local_AC.lengths_episodes: dummy_lengths})
 
                             v_l, p_l, e_l, g_n, v_n, summary, logits = worker.train(worker.episode_states_train,
                                                                           worker.episode_reward_train,
@@ -276,7 +277,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                 # Update learning rate based on calculated KL Divergence
                                 if worker.update_learning_rate_:
                                     # Calculate KL-Divergence of updated policy and policy before update
-                                    kl_divergence = worker.calculate_kl_divergence(logits, worker.episode_states_train, sess)
+                                    kl_divergence = worker.calculate_kl_divergence(logits, worker.episode_states_train, sess, worker.episode_done_train)
                                     # Perform learning rate update based on KL-Divergence
                                     if not np.isnan(kl_divergence):
                                         worker.update_learning_rate(kl_divergence, sess)

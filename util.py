@@ -137,21 +137,12 @@ def process_frame(frame):
     """
     Image processing
     """
-    #s = frame[10:-10,30:-30]
-    # s = rgb2gray(frame)
-    # s = scipy.misc.imresize(s,[84,84])
-    # s = np.reshape(s,[np.prod(s.shape)]) / 255.0
-    # return s
-
     processed_frames = []
     for el in frame:
-        #print(el[0])
-        #print(len(el))
-        #break
         s = rgb2gray(el[0])
         s = scipy.misc.imresize(s,[84,84])
         s = np.reshape(s, [np.prod(s.shape)]) / 255.0
-        #s = s / 255.0
+
         s = np.expand_dims(s, 0)
         processed_frames.append(s)
     return processed_frames
