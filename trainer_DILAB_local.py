@@ -56,18 +56,18 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         # Get all required Paramters
 
         # Gym environment
-        ENV_NAME = 'MsPacman-v0'  # Discrete (4, 2)
-        STATE_DIM =  7056
-        ACTION_DIM = 9
+        ENV_NAME = 'CartPole-v0'  # Discrete (4, 2)
+        STATE_DIM =  4
+        ACTION_DIM = 2
         NUM_ENVS = 3
-        PREPROCESSING = True
+        PREPROCESSING = False
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["CNN", "RNN"],
+                              shared_config=dict(kind=["RNN"],
                                                  cnn_output_size=20,
                                                  dense_layers=[16, 16],
-                                                 lstm_cell_units=128),
+                                                 lstm_cell_units=16),
                               policy_config=dict(layers=[ACTION_DIM],
                                                  noise_dist="independent"),
                               value_config=dict(layers=[1],
@@ -84,7 +84,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR = os.getcwd() + 'tensorflowlogs'
 
         # Choose RL method (A3C, PCL)
-        METHOD = "A3C"
+        METHOD = "PCL"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -246,7 +246,6 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         s2, r, terminal, info = worker.env.step(act_)
                         if PREPROCESSING:
                             s2 = U.process_frame(s2)
-
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
                         worker.add_to_batch(s, r, a, v, terminal)
