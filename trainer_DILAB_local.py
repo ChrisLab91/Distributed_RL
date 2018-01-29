@@ -55,11 +55,13 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Get all required Paramters
 
-        # Gym environment
+        # Running Paramters
+        TOTAL_GLOBAL_EPISODES = 200
 
-        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole
+        # Gym environment
+        ENV_NAME = 'CartPole-v0'   # MsPacman CartPole
         NUM_ENVS = 3
-        PREPROCESSING = True
+        PREPROCESSING = False
         IMAGE_SIZE_PREPROCESSED = 84
 
         gw = GymWrapper(ENV_NAME)
@@ -73,7 +75,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["CNN", "RNN"],
+                              shared_config=dict(kind=["RNN"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
                                                  cnn_output_size=20,
                                                  dense_layers=[16, 16],
@@ -91,8 +93,11 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Summary LOGDIR
         # LOG_DIR = '~/A3C/MyDistTest/'
-        LOG_DIR = os.getcwd() + 'tensorflowlogs'
+        LOG_DIR = os.getcwd() + '_tensorflowlogs'
+        LOG_DIR_CHECKPOINT = os.getcwd() + "_modelcheckpoints"
 
+        checkpoint = tf.train.get_checkpoint_state(LOG_DIR_CHECKPOINT)
+        print(checkpoint)
         # Choose RL method (A3C, PCL)
         METHOD = "A3C"
         print("Run method: " + METHOD)
@@ -108,7 +113,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                       # this contexts are synced across processes
                                                       ps_strategy=U.greedy_ps_strategy(ps_tasks=num_ps))):
 
-            global_episodes = tf.Variable(0, dtype=tf.int32, name='global_episodes', trainable=False)
+            global_episodes = tf.train.get_or_create_global_step()
             master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', network_config, learning_rate=None, tau=TAU, rollout=ROLLOUT,
                                         method=METHOD)  # Generate global network
 
@@ -126,18 +131,21 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         local_init_op = tf.global_variables_initializer()
 
-        #sv = tf.train.Supervisor(is_chief=(TASK_ID == 0),
-        #                         logdir=LOG_DIR,
-        #                         init_op=local_init_op,
-        #                         summary_op=merged_summary)
-                                 #saver=saver,
-                                 #global_step=global_step,
-                                 #save_model_secs=600)
-
         with tf.Session(server.target) as sess:
             sess.run(local_init_op)
 
-        with tf.train.MonitoredTrainingSession(master=server.target) as sess:
+        # Setup monitoring
+        is_chief = (TASK_ID == 0)
+        saverHook = tf.train.CheckpointSaverHook(checkpoint_dir = LOG_DIR_CHECKPOINT,
+                                                 save_steps = 10,
+                                                 saver = tf.train.Saver(sharded = True,
+                                                                        max_to_keep = 1))
+        stopHook = tf.train.StopAtStepHook(num_steps = TOTAL_GLOBAL_EPISODES)
+
+        with tf.train.MonitoredTrainingSession(master=server.target,
+                                               is_chief = is_chief,
+                                               chief_only_hooks=[saverHook],
+                                               hooks = [stopHook]) as sess:
 
             # Define input to worker.work( gamma, sess, coord, merged_summary, writer_summary)
             gamma = GAMMA
@@ -154,7 +162,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
             while not sess.should_stop():
 
-
+                print(sess.run(global_episodes))
                 worker.episode_values = []
                 worker.episode_reward = []
 
@@ -322,13 +330,12 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                 episode_count += 1
 
-                if episode_count == EPISODE_RUNS:
-                    print("Worker stops because max episode runs are reached")
-                    sess.request_stop()
+                #if episode_count == EPISODE_RUNS:
+                #
+                #    sess.request_stop()
 
         # Ask for all the services to stop.
-        #sv.stop()
-
+        print("Worker stops because max episode runs are reached")
 
 if __name__ == '__main__':
 
