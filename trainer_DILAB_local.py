@@ -5,7 +5,6 @@ import tensorflow.contrib.slim as slim
 import scipy.signal
 import gym
 import os
-import os
 import threading
 import multiprocessing
 import tensorflow as tf
@@ -15,6 +14,7 @@ import util as U
 from ac_network import AC_Network
 from worker import Worker
 from worker import update_target_graph, weighted_pick, discounting, norm, unpack_episode
+from gym_wrapper import  GymWrapper
 
 # PARAMETERS
 
@@ -56,15 +56,25 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         # Get all required Paramters
 
         # Gym environment
-        ENV_NAME = 'CartPole-v0'  # Discrete (4, 2)
-        STATE_DIM =  4
-        ACTION_DIM = 2
+
+        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole
         NUM_ENVS = 3
-        PREPROCESSING = False
+        PREPROCESSING = True
+        IMAGE_SIZE_PREPROCESSED = 84
+
+        gw = GymWrapper(ENV_NAME)
+        ACTION_DIM = gw.act_space.n
+
+        if PREPROCESSING:
+            STATE_DIM = IMAGE_SIZE_PREPROCESSED * IMAGE_SIZE_PREPROCESSED
+
+        else:
+            STATE_DIM =  gw.obs_space.shape[0]
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["RNN"],
+                              shared_config=dict(kind=["CNN", "RNN"],
+                                                 cnn_input_size=IMAGE_SIZE_PREPROCESSED,
                                                  cnn_output_size=20,
                                                  dense_layers=[16, 16],
                                                  lstm_cell_units=16),
@@ -84,7 +94,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR = os.getcwd() + 'tensorflowlogs'
 
         # Choose RL method (A3C, PCL)
-        METHOD = "PCL"
+        METHOD = "A3C"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -165,7 +175,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                 # Restart environment
                 s = worker.env.reset()
                 if PREPROCESSING:
-                    s = U.process_frame(s)
+                    s = U.process_frame(s, IMAGE_SIZE_PREPROCESSED)
 
                 # Set initial rnn state based on number of episodes
                 c_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
@@ -245,7 +255,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         # Sample new state and reward from environment
                         s2, r, terminal, info = worker.env.step(act_)
                         if PREPROCESSING:
-                            s2 = U.process_frame(s2)
+                            s2 = U.process_frame(s2, IMAGE_SIZE_PREPROCESSED)
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
                         worker.add_to_batch(s, r, a, v, terminal)

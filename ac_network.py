@@ -87,11 +87,11 @@ class AC_Network():
             return length
 
         self.lengths_episodes = tf.placeholder(shape=[None], dtype=tf.int32)
-        #shared_network_kind = "CNN+RNN"
 
         if "CNN" in shared_network_kind:
 
-            self.image = tf.reshape(self.inputs, shape=[tf.shape(self.inputs)[0] * tf.shape(self.inputs)[1], 84, 84, 1]) 
+            self.image = tf.reshape(self.inputs, shape=[tf.shape(self.inputs)[0] * tf.shape(self.inputs)[1], self.shared_config["cnn_input_size"], 
+                                                                                                             self.shared_config["cnn_input_size"], 1]) 
 
             max_pool_size = [2, 2]
 

@@ -133,14 +133,14 @@ def ob_feature_augment(obs_path):
 
     return list(np.concatenate([obs_path, obs2, time, time2], axis=1))
 
-def process_frame(frame):
+def process_frame(frame, IMAGE_SIZE_PREPROCESSED):
     """
     Image processing
     """
     processed_frames = []
     for el in frame:
         s = rgb2gray(el[0])
-        s = scipy.misc.imresize(s,[84,84])
+        s = scipy.misc.imresize(s,[IMAGE_SIZE_PREPROCESSED, IMAGE_SIZE_PREPROCESSED])
         s = np.reshape(s, [np.prod(s.shape)]) / 255.0
 
         s = np.expand_dims(s, 0)
