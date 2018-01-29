@@ -63,11 +63,19 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         # Get all required Paramters
 
         # Gym environment
-        ENV_NAME = 'MsPacman-v0'  # Discrete (4, 2)
-        STATE_DIM =  7056
-        ACTION_DIM = 9
+        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole
         NUM_ENVS = 3
-        PREPROCESSING = False
+        PREPROCESSING = True       # False for non-images
+        IMAGE_SIZE_PREPROCESSED = 84
+
+        gw = GymWrapper(ENV_NAME)
+        ACTION_DIM = gw.act_space.n
+
+        if PREPROCESSING:
+            STATE_DIM = IMAGE_SIZE_PREPROCESSED * IMAGE_SIZE_PREPROCESSED
+
+        else:
+            STATE_DIM =  gw.obs_space.shape[0]
 
         # Network configuration
         network_config = dict(shared=True,
@@ -172,7 +180,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                 # Restart environment
                 s = worker.env.reset()
                 if PREPROCESSING:
-                    s = U.process_frame(s)
+                    s = U.process_frame(s, IMAGE_SIZE_PREPROCESSED)
 
                 # Set initial rnn state based on number of episodes
                 c_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
@@ -252,7 +260,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         # Sample new state and reward from environment
                         s2, r, terminal, info = worker.env.step(act_)
                         if PREPROCESSING:
-                            s2 = U.process_frame(s2)
+                            s2 = U.process_frame(s2, IMAGE_SIZE_PREPROCESSED)
 
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
