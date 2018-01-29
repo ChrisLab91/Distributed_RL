@@ -85,7 +85,8 @@ def unpack_episode(sampled_eps):
 class Worker():
     def __init__(self, name, s_size, a_size, network_config, learning_rate, global_episodes,
                  env_name, number_envs = 1,
-                 tau = 0.0, rollout = 10, method = "A3C", update_learning_rate_ = True, preprocessing_state = False):
+                 tau = 0.0, rollout = 10, method = "A3C", update_learning_rate_ = True, preprocessing_state = False,
+                 gae_lambda = 1.0):
 
         self.name = "worker_" + str(name)
         self.method = method
@@ -96,6 +97,10 @@ class Worker():
         self.episode_rewards = []
         self.episode_lengths = []
         self.episode_mean_values = []
+
+        # A3C specific setting -> GAE Lambda
+        # https://arxiv.org/abs/1506.02438
+        self.gae_lambda = gae_lambda
 
         # Going to be memory buffer in case we are using PCL
         if self.method == "PCL":
@@ -157,7 +162,7 @@ class Worker():
         # Compute TD residual of V with discount gamma --> can be considered as the advantage of the action a_t
         advantages = [rewards[i][:lengths_rollouts[i]] + gamma * values_list[i][1:] - values_list[i][:-1]
                       for i in range(batch_size)]
-        discounted_advantages = [discounting(advantages[i], gamma)
+        discounted_advantages = [discounting(advantages[i], gamma *  self.gae_lambda)
                                  for i in range(batch_size)]
 
         # Since discounted_rewards and discounted_advantages have different lengths for all episodes
