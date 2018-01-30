@@ -41,6 +41,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
     num_ps, num_workers = len(CLUSTER['ps']), len(CLUSTER['worker'])
 
     #  Get the Cluster Spec
+    print(CLUSTER)
     cluster = tf.train.ClusterSpec(CLUSTER)
 
     # Get the current server element
@@ -86,7 +87,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                 noise_dist=None))
 
         # Learning rate
-        LEARNING_RATE = 0.05
+        LEARNING_RATE = 0.005
         UPDATE_LEARNING_RATE = True
         # Discount rate for advantage estimation and reward discounting
         GAMMA = 0.99
@@ -96,10 +97,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR = os.getcwd() + '_tensorflowlogs'
         LOG_DIR_CHECKPOINT = os.getcwd() + "_modelcheckpoints"
 
-        checkpoint = tf.train.get_checkpoint_state(LOG_DIR_CHECKPOINT)
-        print(checkpoint)
         # Choose RL method (A3C, PCL)
-        METHOD = "A3C"
+        METHOD = "PCL"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -135,17 +134,17 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             sess.run(local_init_op)
 
         # Setup monitoring
-        is_chief = (TASK_ID == 0)
-        saverHook = tf.train.CheckpointSaverHook(checkpoint_dir = LOG_DIR_CHECKPOINT,
-                                                 save_steps = 10,
-                                                 saver = tf.train.Saver(sharded = True,
-                                                                        max_to_keep = 1))
-        stopHook = tf.train.StopAtStepHook(num_steps = TOTAL_GLOBAL_EPISODES)
+        #is_chief = (TASK_ID == 0)
+        #saverHook = tf.train.CheckpointSaverHook(checkpoint_dir = LOG_DIR_CHECKPOINT,
+        #                                         save_steps = 10,
+        #                                         saver = tf.train.Saver(sharded = True,
+        #                                                                max_to_keep = 1))
+        #stopHook = tf.train.StopAtStepHook(num_steps = TOTAL_GLOBAL_EPISODES)
 
-        with tf.train.MonitoredTrainingSession(master=server.target,
-                                               is_chief = is_chief,
-                                               chief_only_hooks=[saverHook],
-                                               hooks = [stopHook]) as sess:
+        with tf.train.MonitoredTrainingSession(master=server.target) as sess:
+                                               #is_chief = is_chief,
+                                               #chief_only_hooks=[saverHook],
+                                               #hooks = [stopHook]) as sess:
 
             # Define input to worker.work( gamma, sess, coord, merged_summary, writer_summary)
             gamma = GAMMA
@@ -162,17 +161,16 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
             while not sess.should_stop():
 
-                print(sess.run(global_episodes))
                 worker.episode_values = []
                 worker.episode_reward = []
 
-                if worker.method == "A3C":
-                    # Objects to hold the bacth used to update the Agent
-                    worker.episode_states_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0, worker.s_size)
-                    worker.episode_reward_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
-                    worker.episode_actions_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0, worker.a_size)
-                    worker.episode_values_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
-                    worker.episode_done_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
+                #if worker.method == "A3C":
+                # Objects to hold the bacth used to update the Agent
+                worker.episode_states_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0, worker.s_size)
+                worker.episode_reward_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
+                worker.episode_actions_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0, worker.a_size)
+                worker.episode_values_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
+                worker.episode_done_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
 
                 # Used by PCL
                 # Hold reward and value function mean value of sampled episodes from replay buffer
