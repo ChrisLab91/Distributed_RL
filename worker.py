@@ -118,6 +118,12 @@ class Worker():
         self.s_size = s_size
         self.preprocessing_state = preprocessing_state
 
+        # Get information if RNN is used
+        if "RNN" in network_config["shared_config"]["kind"]:
+            self.rnn_network = True
+        else:
+            self.rnn_network = False
+
         # Get Noisy Net Information if applied
         self.noisy_policy = network_config["policy_config"]["noise_dist"]
         self.policy_layers = len(network_config["policy_config"]["layers"])
@@ -177,20 +183,21 @@ class Worker():
 
         # Update the global network using gradients from loss
         # Generate network statistics to periodically save
-        # sess.run(self.local_AC.reset_state_op)
-        # Set initial rnn state based on number of episodes
-        c_init = np.zeros((batch_size, self.local_AC.cell_units), np.float32)
-        h_init = np.zeros((batch_size, self.local_AC.cell_units), np.float32)
-        rnn_state = np.array([c_init, h_init])
 
         feed_dict = {self.local_AC.target_v: padded_discounted_rewards,
                      self.local_AC.inputs: states,
                      self.local_AC.actions: actions,
                      self.local_AC.advantages: padded_discounted_advantages,
-                     self.local_AC.state_in[0]: rnn_state[0],
-                     self.local_AC.state_in[1]: rnn_state[1],
                      self.local_AC.rewards: rewards,
                      self.local_AC.lengths_episodes: lengths_rollouts}
+
+        if self.rnn_network:
+            # Set initial rnn state based on number of episodes
+            c_init = np.zeros((batch_size, self.local_AC.cell_units), np.float32)
+            h_init = np.zeros((batch_size, self.local_AC.cell_units), np.float32)
+            rnn_state = np.array([c_init, h_init])
+            feed_dict[self.local_AC.state_in[0]] = rnn_state[0]
+            feed_dict[self.local_AC.state_in[1]] = rnn_state[1]
 
         summary = None
         if self.name == "worker_0":
@@ -225,30 +232,30 @@ class Worker():
         while rollout > min_len:
             rollout = int(rollout / 2)
 
+        # Get required discounting multipliers
         discount = np.array([gamma ** i for i in range(rollout)], dtype=np.float32)
 
-        # Set rnn_state based on the amount of episodes
-        # Dynamic state initialization
-        batch_size = len(episodes)
-        c_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
-        h_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
+        feed_dict_ = {
+            self.local_AC.inputs: s_ep,
+            self.local_AC.actions: a_ep,
+            self.local_AC.rewards: r_ep,
+            self.local_AC.discount: discount,
+            self.local_AC.rollout: rollout,
+            self.local_AC.lengths_episodes: lens_seqs
+        }
 
-        # Perform padding based on the longest episode
-        # Elements to be --> function pad_episodes given a list of sampled episodes
+        if self.rnn_network:
+            # Set rnn_state based on the amount of episodes
+            # Dynamic state initialization
+            batch_size = len(episodes)
+            c_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
+            h_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
+            feed_dict_[self.local_AC.state_in[0]] = c_init
+            feed_dict_[self.local_AC.state_in[1]] = h_init
 
         summary = None
         if self.name == "worker_0":
             # Perform training on one episode batch
-            feed_dict_ = {
-                self.local_AC.inputs: s_ep,
-                self.local_AC.actions: a_ep,
-                self.local_AC.rewards: r_ep,
-                self.local_AC.discount: discount,
-                self.local_AC.rollout: rollout,
-                self.local_AC.state_in[0]: c_init,
-                self.local_AC.state_in[1]: h_init,
-                self.local_AC.lengths_episodes: lens_seqs
-            }
             summary, v_l, p_l, total_loss, _, _, logits = sess.run([merged_summary, self.local_AC.value_loss,
                                                          self.local_AC.policy_loss,
                                                          self.local_AC.loss,
@@ -258,17 +265,6 @@ class Worker():
                                                         feed_dict=feed_dict_)
         else:
             # Perform training on one episode batch
-            feed_dict_ = {
-                self.local_AC.inputs: s_ep,
-                self.local_AC.actions: a_ep,
-                self.local_AC.rewards: r_ep,
-                self.local_AC.discount: discount,
-                self.local_AC.rollout: rollout,
-                self.local_AC.state_in[0]: c_init,
-                self.local_AC.state_in[1]: h_init,
-                self.local_AC.lengths_episodes: lens_seqs
-            }
-
             v_l, p_l, total_loss, _, _, logits = sess.run([self.local_AC.value_loss,
                                                 self.local_AC.policy_loss,
                                                 self.local_AC.loss,
@@ -293,16 +289,19 @@ class Worker():
 
         # Set rnn_state based on the amount of episodes
         # Dynamic state initialization
-        c_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
-        h_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
 
         feed_dict_ = {
             self.local_AC.oldPolicy: old_logits,
             self.local_AC.inputs: s_ep,
-            self.local_AC.state_in[0]: c_init,
-            self.local_AC.state_in[1]: h_init,
             self.local_AC.lengths_episodes: lens_seqs
         }
+
+        if self.rnn_network:
+            c_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
+            h_init = np.zeros(shape=(batch_size, self.local_AC.cell_units))
+
+            feed_dict_[self.local_AC.state_in[0]] = c_init
+            feed_dict_[self.local_AC.state_in[1]] = h_init
 
         # Run Tensorgraph with old and new logits as input in order to compute the KL-Divergence
         kl_divergence = sess.run(self.local_AC.kl_divergence, feed_dict_)
@@ -329,181 +328,27 @@ class Worker():
     # Act on current policy
     def act(self, state, rnn_state, lens_seqs, sess):
 
+        feed_dict_ = {self.local_AC.inputs: state,
+                      self.local_AC.lengths_episodes: lens_seqs}
 
-        action_dist, value, rnn_state = sess.run([self.local_AC.policy, self.local_AC.value, self.local_AC.state_out],
-                                        feed_dict={self.local_AC.inputs: state,
-                                                   self.local_AC.state_in[0]: rnn_state[0],
-                                                   self.local_AC.state_in[1]: rnn_state[1],
-                                                   self.local_AC.lengths_episodes: lens_seqs})
+        if self.rnn_network:
+            # If rnn (LSTM) cell is used supply current internal states
+            feed_dict_[self.local_AC.state_in[0]] = rnn_state[0]
+            feed_dict_[self.local_AC.state_in[1]] = rnn_state[1]
+            action_dist, value, rnn_state = sess.run([self.local_AC.policy, self.local_AC.value, self.local_AC.state_out],
+                                                 feed_dict_)
+
+        else:
+            action_dist, value = sess.run(
+                [self.local_AC.policy, self.local_AC.value],
+                feed_dict_)
+            rnn_state = None
 
         # Chose action with largest probability
         a0 = [weighted_pick(a,1) for a in action_dist]  # Use stochastic distribution sampling
         action_one_hot = np.eye(self.a_size, dtype=np.int32)[np.array(a0)]
 
         return action_one_hot, value, rnn_state, action_dist
-
-    def work(self, gamma, sess, coord, merged_summary, writer_summary):
-        episode_count = sess.run(self.global_episodes)
-        total_steps = 0
-        train_steps = 0
-        print("Starting worker " + str(self.number))
-        with sess.as_default(), sess.graph.as_default():
-            while not coord.should_stop():
-                sess.run(self.update_local_ops)
-                self.episode_values = []
-                self.episode_reward = []
-
-                #if self.method == "A3C":
-                # Objects to hold the bacth used to update the Agent
-                self.episode_states_train = np.array([], dtype=np.float32).reshape(len(self.env),0,self.s_size)
-                self.episode_reward_train = np.array([], dtype=np.float32).reshape(len(self.env),0)
-                self.episode_actions_train = np.array([], dtype=np.float32).reshape(len(self.env),0, self.a_size)
-                self.episode_values_train = np.array([], dtype=np.float32).reshape(len(self.env),0)
-                self.episode_done_train = np.array([], dtype=np.float32).reshape(len(self.env), 0)
-
-                # Used by PCL
-                # Hold reward and value function mean value of sampled episodes from replay buffer
-                episode_reward_offline = 0
-                episode_value_offline = 0
-                episode_step_count = 0
-
-                # Restart environment
-                s = self.env.reset()
-
-                # Set initial rnn state based on number of episodes
-                c_init = np.zeros((len(self.env), self.local_AC.cell_units), np.float32)
-                h_init = np.zeros((len(self.env), self.local_AC.cell_units), np.float32)
-                rnn_state = np.array([c_init, h_init])
-
-                # sample new noisy parameters in fully connected layers if
-                # noisy net is used
-                if episode_count % 15 == 0:
-                    if self.noisy_policy is not None:
-                        with tf.variable_scope(self.name):
-                            with tf.variable_scope("policy_net"):
-                                # Based on layers set scopes
-                                scopes = []
-                                for i in range(self.policy_layers):
-                                    scopes.append(self.name + "/policy_net/" + "noise_action_" + str(i) + "/")
-                                sample_new_weights(scopes, sess)
-
-                    if self.noisy_value is not None:
-                        with tf.variable_scope(self.name):
-                            with tf.variable_scope("value_net"):
-                                scopes = []
-                                for i in range(self.value_layers):
-                                    scopes.append(self.name + "/value_net/" + "noise_value_" + str(i) + "/")
-                                sample_new_weights(scopes, sess)
-
-                if self.method == "PCL":
-
-                    # Perform a rollout of the chosen environment
-                    episodes = self.rolloutPCL(sess, s, rnn_state, max_path_length = 1000, episode_count = len(self.env))
-
-                    # Add sampled episode to replay buffer
-                    self.replay_buffer.add(episodes)
-
-                    # Get rewards and value estimates of current sample
-                    _, _, r_ep, v_ep, _ = unpack_episode(episodes)
-
-                    episode_values = np.mean(np.sum(v_ep, axis =1))
-                    episode_reward = np.mean(np.sum(r_ep, axis =1))
-
-                    # Train on online episode if applicable
-                    train_online = False
-                    train_offline = True
-
-                    if train_online:
-
-                        # Train PCL agent
-                        _, _, summary = self.train_pcl(episodes, gamma, sess, merged_summary)
-
-                        # Update summary information
-                        train_steps = train_steps + 1
-                        if self.name == "worker_0":
-                            writer_summary.add_summary(summary, train_steps)
-
-
-                    if train_offline:
-
-                        # Sample len(envs) many episodes from the replay buffer
-                        sampled_episodes = self.replay_buffer.sample(episode_count = len(self.env))
-
-                        # Train PCL agent
-                        r_ep, v_ep, summary = self.train_pcl(sampled_episodes, gamma, sess, merged_summary)
-
-                        # Update summary information
-                        train_steps = train_steps + 1
-                        if self.name == "worker_0":
-                            writer_summary.add_summary(summary, train_steps)
-
-                        # Write add. summary information
-                        episode_reward_offline = np.mean(np.sum(r_ep, axis = 1))
-                        episode_value_offline = np.mean(np.sum(v_ep, axis = 1))
-
-                elif self.method == "A3C":
-                    # Run an episode
-                    while not self.env.all_done():
-
-                        # Get preferred action distribution
-                        a, v, rnn_state, _ = self.act(s, rnn_state, sess)
-
-                        # Get action for every environment
-                        act_ = [np.argmax(a_) for a_ in a]
-                        # Sample new state and reward from environment
-                        s2, r, terminal, info = self.env.step(act_)
-
-                        # Add states, rewards, actions, values and terminal information to A3C minibatch
-                        self.add_to_batch(s,r,a,v,terminal)
-
-                        # Get episode information for tracking the training process
-                        self.episode_values.append(v)
-                        self.episode_reward.append(r)
-
-                        # Train on mini batches from episode
-                        if (episode_step_count % MINI_BATCH == 0 and episode_step_count > 0) or self.env.all_done():
-                            v1 = sess.run([self.local_AC.value],
-                                          feed_dict={self.local_AC.inputs: s2,
-                                                        self.local_AC.state_in[0]: rnn_state[0],
-                                                        self.local_AC.state_in[1]: rnn_state[1]})
-
-                            v_l, p_l, e_l, g_n, v_n, summary = self.train(self.episode_states_train, self.episode_reward_train,
-                                                                          self.episode_actions_train, self.episode_values_train,
-                                                                          self.episode_done_train,
-                                                                          sess, gamma, np.squeeze(v1), merged_summary)
-                            train_steps = train_steps + 1
-
-                            # Update summary information
-                            if self.name == "worker_0":
-                                writer_summary.add_summary(summary, train_steps)
-
-                            # Reset A3C minibatch after it has been used to update the model
-                            self.reset_batch()
-
-                        # Set previous state for next step
-                        s = s2
-                        total_steps += 1
-                        episode_step_count += 1
-
-                    episode_values = np.mean(np.sum(self.episode_values, axis = 0))
-                    episode_reward = np.mean(np.sum(self.episode_reward, axis = 0))
-
-                if episode_count % 20 == 0:
-                    print("Reward: " + str(episode_reward), " | Episode", episode_count, " of " + self.name)
-                    if self.method == "PCL":
-                        print("Reward Offline: " + str(episode_reward_offline), " | Episode", episode_count, " of " + self.name)
-
-                self.episode_rewards.append(episode_reward)
-                self.episode_lengths.append(episode_step_count)
-                self.episode_mean_values.append(episode_values)
-
-                sess.run(self.increment) # Next global episode
-
-                episode_count += 1
-
-                if episode_count == EPISODE_RUNS:
-                    print("Worker stops because max episode runs are reached")
-                    coord.request_stop()
 
     def getRewards(self):
         return self.episode_rewards

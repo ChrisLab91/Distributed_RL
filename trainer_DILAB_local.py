@@ -76,10 +76,10 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["RNN"],
+                              shared_config=dict(kind=["Dense"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
                                                  cnn_output_size=20,
-                                                 dense_layers=[16, 16],
+                                                 dense_layers=[8, 8],
                                                  lstm_cell_units=16),
                               policy_config=dict(layers=[ACTION_DIM],
                                                  noise_dist="independent"),
@@ -178,10 +178,13 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                 if PREPROCESSING:
                     s = U.process_frame(s, IMAGE_SIZE_PREPROCESSED)
 
-                # Set initial rnn state based on number of episodes
-                c_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
-                h_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
-                rnn_state = np.array([c_init, h_init])
+                if worker.rnn_network:
+                    # Set initial rnn state based on number of episodes
+                    c_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
+                    h_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
+                    rnn_state = np.array([c_init, h_init])
+                else:
+                    rnn_state = None
 
                 # sample new noisy parameters in fully connected layers if
                 # noisy net is used
@@ -267,11 +270,15 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                         # Train on mini batches from episode
                         if (episode_step_count % MINI_BATCH == 0 and episode_step_count > 0) or worker.env.all_done():
-                            v1 = sess.run([worker.local_AC.value],
-                                          feed_dict={worker.local_AC.inputs: s2,
-                                                     worker.local_AC.state_in[0]: rnn_state[0],
-                                                     worker.local_AC.state_in[1]: rnn_state[1],
-                                                     worker.local_AC.lengths_episodes: dummy_lengths})
+
+                            feed_dict_ = {worker.local_AC.inputs: s2,
+                                          worker.local_AC.lengths_episodes: dummy_lengths}
+
+                            if worker.rnn_network:
+                                feed_dict_[worker.local_AC.state_in[0]] = rnn_state[0]
+                                feed_dict_[worker.local_AC.state_in[1]] = rnn_state[1]
+
+                            v1 = sess.run([worker.local_AC.value], feed_dict_)
 
                             v_l, p_l, e_l, g_n, v_n, summary, logits = worker.train(worker.episode_states_train,
                                                                           worker.episode_reward_train,
