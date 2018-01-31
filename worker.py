@@ -59,6 +59,7 @@ def unpack_episode(sampled_eps):
     max_len = max(lens_seqs)
     min_len = min(lens_seqs)
 
+
     states_start = [np.pad(ep["states"],
                            [(0, 0), (0, max_len - np.shape(ep["states"])[1]), (0, 0)], mode='constant')
                     for ep in sampled_eps]
@@ -128,7 +129,6 @@ class Worker():
         self.update_learning_rate_ = update_learning_rate_
 
     def train(self, states, rewards, actions, values, terminal, sess, gamma, r, merged_summary):
-
 
         # Get length of different rollouts --> Since given e.g. 10 envs maybe 5 terminated earlier
         lengths_rollouts = [int(-1 * sum(done - 1)) for done in terminal]
@@ -220,7 +220,6 @@ class Worker():
         # Train on sampled episodes
 
         a_ep, s_ep, r_ep, v_ep, min_len, lens_seqs = unpack_episode(episodes)
-
 
         rollout = self.local_AC.rollout_pcl
         while rollout > min_len:
@@ -354,13 +353,13 @@ class Worker():
                 self.episode_values = []
                 self.episode_reward = []
 
-                if self.method == "A3C":
-                    # Objects to hold the bacth used to update the Agent
-                    self.episode_states_train = np.array([], dtype=np.float32).reshape(len(self.env),0,self.s_size)
-                    self.episode_reward_train = np.array([], dtype=np.float32).reshape(len(self.env),0)
-                    self.episode_actions_train = np.array([], dtype=np.float32).reshape(len(self.env),0, self.a_size)
-                    self.episode_values_train = np.array([], dtype=np.float32).reshape(len(self.env),0)
-                    self.episode_done_train = np.array([], dtype=np.float32).reshape(len(self.env), 0)
+                #if self.method == "A3C":
+                # Objects to hold the bacth used to update the Agent
+                self.episode_states_train = np.array([], dtype=np.float32).reshape(len(self.env),0,self.s_size)
+                self.episode_reward_train = np.array([], dtype=np.float32).reshape(len(self.env),0)
+                self.episode_actions_train = np.array([], dtype=np.float32).reshape(len(self.env),0, self.a_size)
+                self.episode_values_train = np.array([], dtype=np.float32).reshape(len(self.env),0)
+                self.episode_done_train = np.array([], dtype=np.float32).reshape(len(self.env), 0)
 
                 # Used by PCL
                 # Hold reward and value function mean value of sampled episodes from replay buffer
@@ -537,52 +536,38 @@ class Worker():
             max_path_length = self.env.envs[0].spec.tags.get(
                 'wrapper_config.TimeLimit.max_episode_steps')
 
-        # Define list so save episodes
+        # Reset rnn_state for every iteration
+        s = initial_state
+        rnn_state = rnn_state_init
+        path_length = np.zeros(len(self.env))
+
+        # Sample one episode
+        while all(path_length) < max_path_length and not self.env.all_done():
+            dummy_lengths = np.ones(len(self.env))
+            a, v, rnn_state, _ = self.act(s, rnn_state, dummy_lengths, sess)
+            # Get action for every environment
+            act_ = [np.argmax(a_) for a_ in a]
+            # Sample new state and reward from environment
+            s2, r, terminal, info = self.env.step(act_)
+            if self.preprocessing_state:
+                s2 = U.process_frame(s2, 84)
+            # Add states, rewards, actions, values and terminal information to PCL episode batch
+            self.add_to_batch(s, r, a, v, terminal)
+            for i in range(len(self.env)):
+                if not self.env.dones[i]:
+                    path_length[i] = path_length[i] + 1
+            s=s2
+
         episodes = []
-
-        # Episode count will correspond to different independent envs
-        for i in range(episode_count):
-            # Reset rnn_state for every iteration
-            s = initial_state[i]
-            states = []
-            actions = []
-            rewards = []
-            agent_infos = []
-            env_infos = []
-            values = []
-            path_length = 0
-            rnn_state_rolling = np.array([rnn_state_init[0][i], rnn_state_init[1][i]]).reshape(2,1,np.shape(rnn_state_init)[2])
-
-            # Sample one episode
-            while path_length < max_path_length:
-                s_reshape = np.reshape(s, newshape=[1,1,np.shape(initial_state)[2]])
-                #s_reshape = np.expand_dims(s, 0)
-
-                a, v, rnn_state_rolling, agent_info = self.act(s_reshape, rnn_state_rolling, [1], sess)
-                next_s, r, d, env_info = self.env.envs[i].step([np.argmax(a_) for a_ in a][0])
-                if self.preprocessing_state:
-                    next_s = np.expand_dims(next_s, 0)
-                    next_s = U.process_frame(next_s)
-                states.append(np.squeeze(s_reshape))
-                rewards.append(r)
-                values.append(np.squeeze(v))
-                actions.append(np.argmax(a))
-                agent_infos.append(agent_info)
-                env_infos.append(env_info)
-                path_length += 1
-                if d:
-                    break
-                s = next_s
-            # Append sampled episode
-            action_array = np.eye(self.a_size, dtype=np.int32)[np.array(actions)]
+        for i in range(len(self.env)):
+            path_length_temp = int(path_length[i]) + 1
             episodes.append(dict(
-                                states=np.expand_dims(np.array(states), 0),
-                                actions=np.expand_dims(np.array(action_array),0),
-                                rewards=np.expand_dims(np.array(rewards),0),
-                                values = np.expand_dims(np.reshape(np.array(values), newshape= (len(np.array(values)))), 0),
-                                agent_infos=np.expand_dims(np.array(agent_infos),0),
-                                env_infos=np.expand_dims(np.array(env_infos),0),
-                                path_length=int(path_length)
-                            ))
-        return episodes
+                states=np.expand_dims(self.episode_states_train[i][:path_length_temp],0),
+                actions=np.expand_dims(self.episode_actions_train[i][:path_length_temp],0),
+                rewards=np.expand_dims(self.episode_reward_train[i][:path_length_temp], 0),
+                values=np.expand_dims(self.episode_values_train[i][:path_length_temp], 0),
+                path_length=path_length_temp
+            ))
 
+
+        return episodes
