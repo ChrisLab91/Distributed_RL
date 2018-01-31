@@ -3,7 +3,7 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
-from tensorforce2.core.preprocessing import Preprocessor
+from preprocessor import Preprocessor
 
 
 

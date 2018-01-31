@@ -13,17 +13,17 @@
 # limitations under the License.
 # ==============================================================================
 
-from tensorforce2.core.preprocessing.preprocessor import Preprocessor
-from tensorforce2.core.preprocessing.sequence import Sequence
-from tensorforce2.core.preprocessing.standardize import Standardize
-from tensorforce2.core.preprocessing.running_standardize import RunningStandardize
-from tensorforce2.core.preprocessing.normalize import Normalize
-from tensorforce2.core.preprocessing.grayscale import Grayscale
-from tensorforce2.core.preprocessing.image_resize import ImageResize
-from tensorforce2.core.preprocessing.divide import Divide
-from tensorforce2.core.preprocessing.clip import Clip
-from tensorforce2.core.preprocessing.preprocessing import Preprocessing
-from tensorforce2.core.preprocessing.crop import Crop
+from preprocessor import Preprocessor
+from sequence import Sequence
+from standardize import Standardize
+from running_standardize import RunningStandardize
+from normalize import Normalize
+from grayscale import Grayscale
+from image_resize import ImageResize
+from divide import Divide
+from clip import Clip
+from preprocessing import Preprocessing
+from crop import Crop
 
 
 preprocessors = dict(
