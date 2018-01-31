@@ -551,7 +551,7 @@ class Worker():
             s2, r, terminal, info = self.env.step(act_)
             if self.preprocessing_state:
                 s2 = U.process_frame(s2, 84)
-            # Add states, rewards, actions, values and terminal information to A3C minibatch
+            # Add states, rewards, actions, values and terminal information to PCL episode batch
             self.add_to_batch(s, r, a, v, terminal)
             for i in range(len(self.env)):
                 if not self.env.dones[i]:
@@ -560,12 +560,13 @@ class Worker():
 
         episodes = []
         for i in range(len(self.env)):
+            path_length_temp = int(path_length[i]) + 1
             episodes.append(dict(
-                states=np.expand_dims(self.episode_states_train[i][:int(path_length[i])],0),
-                actions=np.expand_dims(self.episode_actions_train[i][:int(path_length[i])],0),
-                rewards=np.expand_dims(self.episode_reward_train[i][:int(path_length[i])], 0),
-                values=np.expand_dims(self.episode_values_train[i][:int(path_length[i])], 0),
-                path_length=int(path_length[i])
+                states=np.expand_dims(self.episode_states_train[i][:path_length_temp],0),
+                actions=np.expand_dims(self.episode_actions_train[i][:path_length_temp],0),
+                rewards=np.expand_dims(self.episode_reward_train[i][:path_length_temp], 0),
+                values=np.expand_dims(self.episode_values_train[i][:path_length_temp], 0),
+                path_length=path_length_temp
             ))
 
 

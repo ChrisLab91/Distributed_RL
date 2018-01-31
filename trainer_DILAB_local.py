@@ -61,7 +61,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Gym environment
         ENV_NAME = 'CartPole-v0'   # MsPacman CartPole
-        NUM_ENVS = 3
+        NUM_ENVS = 5
         PREPROCESSING = False
         IMAGE_SIZE_PREPROCESSED = 84
 
@@ -164,13 +164,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                 worker.episode_values = []
                 worker.episode_reward = []
 
-                #if worker.method == "A3C":
                 # Objects to hold the bacth used to update the Agent
-                worker.episode_states_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0, worker.s_size)
-                worker.episode_reward_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
-                worker.episode_actions_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0, worker.a_size)
-                worker.episode_values_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
-                worker.episode_done_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
+                worker.reset_batch()
 
                 # Used by PCL
                 # Hold reward and value function mean value of sampled episodes from replay buffer
