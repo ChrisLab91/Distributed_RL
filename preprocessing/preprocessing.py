@@ -17,9 +17,9 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
 
-from tensorforce2 import util
-from tensorforce2.core.preprocessing import Preprocessor
-import tensorforce2.core.preprocessing
+
+from preprocessor import Preprocessor
+
 
 
 class Preprocessing(object):
