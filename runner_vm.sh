@@ -1,27 +1,54 @@
 #!/usr/bin/env bash
+pss="10.155.209.68"
+workers="10.155.209.35"
+port="2222"
 
-#rm nohup.out
-workers=2
-ps=1
-for ((i=0; i<$ps; i++)); do
-   python trainer_DILAB_vm.py \
+pslist=$(echo $pss | tr "," "\n")
+workerlist=$(echo $workers | tr "," "\n")
+
+#prepare Strings for python script args
+for vmip in $pslist
+do
+   psstring=$psstring$vmip":"$port","
+done
+psstring=${psstring::-1}
+
+for vmip in $workerlist
+do
+   workerstring=$workerstring$vmip":"$port","
+done
+workerstring=${workerstring::-1}
+
+#run python scripts remotely
+i=0
+for vmip in $pslist
+do
+   ssh ubuntu@$vmip << EOF
+   python ~/Distributed_VM_example/trainer_DILAB_vm.py \
       ps \
       $i \
-      --worker_num $workers \
-      --ps_num $ps  \
-      --ps_hosts=10.155.209.27:2225 \
-      --worker_hosts=10.155.208.213:2225,10.155.208.240:2225 \
+      --ps_hosts=$psstring \
+      --worker_hosts=$workerstring \
       &
+EOF
+   ((i++))
+   echo $i
 done
 
 
-for ((i=0; i<$workers; i++)); do
-    python trainer_DILAB_vm.py \
-       worker \
-       $i  \
-       --worker_num $workers \
-       --ps_num $ps  \
-      --ps_hosts=10.155.209.27:2225 \
-      --worker_hosts=10.155.208.213:2225,10.155.208.240:2225 \
-       &
+i=0
+for vmip in $workerlist
+do
+   ssh ubuntu@$vmip << EOF
+   time
+   python ~/Distributed_VM_example/trainer_DILAB_vm.py \
+      ps \
+      $i \
+      --ps_hosts=$psstring \
+      --worker_hosts=$workerstring \
+      &
+EOF
+   ((i++))
+   echo $i
 done
+

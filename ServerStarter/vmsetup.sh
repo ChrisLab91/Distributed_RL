@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-vms="10.155.208.20" #, 10.155.208.112, 10.155.208.4"
+vms="10.155.209.68, 10.155.209.35" #, 10.155.208.112, 10.155.208.4"
 #path="Distributed_VM_example/ServerStarter/vmscript.sh"
 
 vmlist=$(echo $vms | tr "," "\n")
