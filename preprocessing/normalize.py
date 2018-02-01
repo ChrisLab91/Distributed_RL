@@ -17,6 +17,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 import numpy as np
+
 from tensorforce.core.preprocessing import Preprocessor
 
 epsilon = 1e-6

@@ -13,7 +13,8 @@ import util as U
 
 from ac_network import AC_Network
 from worker import Worker
-from worker import sample_new_weights, update_target_graph, weighted_pick, discounting, norm, unpack_episode
+from worker import update_target_graph, weighted_pick, discounting, norm, unpack_episode
+from gym_wrapper import  GymWrapper
 
 # PARAMETERS
 
@@ -59,13 +60,15 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         server.join()
     else:
 
-
         # Get all required Paramters
 
+        # Running Paramters
+        TOTAL_GLOBAL_EPISODES = 200
+
         # Gym environment
-        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole
-        NUM_ENVS = 3
-        PREPROCESSING = True       # False for non-images
+        ENV_NAME = 'CartPole-v0'  # MsPacman CartPole
+        NUM_ENVS = 5
+        PREPROCESSING = False
         IMAGE_SIZE_PREPROCESSED = 84
 
         gw = GymWrapper(ENV_NAME)
@@ -81,31 +84,33 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             print("Do following preprocessing steps: {0}".format(types_of_preprocess))
 
         else:
-            STATE_DIM =  gw.obs_space.shape[0]
+            STATE_DIM = gw.obs_space.shape[0]
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["CNN", "RNN"],
+                              shared_config=dict(kind=["RNN"],
+                                                 cnn_input_size=IMAGE_SIZE_PREPROCESSED,
                                                  cnn_output_size=20,
                                                  dense_layers=[16, 16],
-                                                 lstm_cell_units=128),
+                                                 lstm_cell_units=16),
                               policy_config=dict(layers=[ACTION_DIM],
                                                  noise_dist="independent"),
                               value_config=dict(layers=[1],
                                                 noise_dist=None))
 
         # Learning rate
-        LEARNING_RATE = 0.05
+        LEARNING_RATE = 0.005
         UPDATE_LEARNING_RATE = True
         # Discount rate for advantage estimation and reward discounting
         GAMMA = 0.99
 
         # Summary LOGDIR
         # LOG_DIR = '~/A3C/MyDistTest/'
-        LOG_DIR = os.getcwd() + 'tensorflowlogs'
+        LOG_DIR = os.getcwd() + '_tensorflowlogs'
+        LOG_DIR_CHECKPOINT = os.getcwd() + "_modelcheckpoints"
 
         # Choose RL method (A3C, PCL)
-        METHOD = "A3C"
+        METHOD = "PCL"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -119,14 +124,15 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                       # this contexts are synced across processes
                                                       ps_strategy=U.greedy_ps_strategy(ps_tasks=num_ps))):
 
-            global_episodes = tf.Variable(0, dtype=tf.int32, name='global_episodes', trainable=False)
-            master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', network_config, learning_rate=None, tau=TAU, rollout=ROLLOUT,
+            global_episodes = tf.train.get_or_create_global_step()
+            master_network = AC_Network(STATE_DIM, ACTION_DIM, 'global', network_config, learning_rate=None, tau=TAU,
+                                        rollout=ROLLOUT,
                                         method=METHOD)  # Generate global network
 
             with tf.device(worker_device):
                 worker = Worker(TASK_ID, STATE_DIM, ACTION_DIM, network_config, LEARNING_RATE, global_episodes,
-                                ENV_NAME, number_envs =  NUM_ENVS, tau = TAU, rollout= ROLLOUT, method=METHOD,
-                                update_learning_rate_=UPDATE_LEARNING_RATE, preprocessing_state = PREPROCESSING)
+                                ENV_NAME, number_envs=NUM_ENVS, tau=TAU, rollout=ROLLOUT, method=METHOD,
+                                update_learning_rate_=UPDATE_LEARNING_RATE, preprocessing_state=PREPROCESSING)
 
         # Get summary information
         if worker.name == "worker_0":
@@ -137,18 +143,21 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         local_init_op = tf.global_variables_initializer()
 
-        #sv = tf.train.Supervisor(is_chief=(TASK_ID == 0),
-        #                         logdir=LOG_DIR,
-        #                         init_op=local_init_op,
-        #                         summary_op=merged_summary)
-                                 #saver=saver,
-                                 #global_step=global_step,
-                                 #save_model_secs=600)
-
         with tf.Session(server.target) as sess:
             sess.run(local_init_op)
 
+        # Setup monitoring
+        # is_chief = (TASK_ID == 0)
+        # saverHook = tf.train.CheckpointSaverHook(checkpoint_dir = LOG_DIR_CHECKPOINT,
+        #                                         save_steps = 10,
+        #                                         saver = tf.train.Saver(sharded = True,
+        #                                                                max_to_keep = 1))
+        # stopHook = tf.train.StopAtStepHook(num_steps = TOTAL_GLOBAL_EPISODES)
+
         with tf.train.MonitoredTrainingSession(master=server.target) as sess:
+            # is_chief = is_chief,
+            # chief_only_hooks=[saverHook],
+            # hooks = [stopHook]) as sess:
 
             # Define input to worker.work( gamma, sess, coord, merged_summary, writer_summary)
             gamma = GAMMA
@@ -157,7 +166,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             REWARD_FACTOR = 0.001
             EPISODE_RUNS = 1000
 
-            #episode_count = sess.run(worker.global_episodes)
+            # episode_count = sess.run(worker.global_episodes)
             episode_count = 0
             total_steps = 0
             train_steps = 0
@@ -165,17 +174,11 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
             while not sess.should_stop():
 
-
                 worker.episode_values = []
                 worker.episode_reward = []
 
-                if worker.method == "A3C":
-                    # Objects to hold the bacth used to update the Agent
-                    worker.episode_states_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0, worker.s_size)
-                    worker.episode_reward_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
-                    worker.episode_actions_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0, worker.a_size)
-                    worker.episode_values_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
-                    worker.episode_done_train = np.array([], dtype=np.float32).reshape(len(worker.env), 0)
+                # Objects to hold the bacth used to update the Agent
+                worker.reset_batch()
 
                 # Used by PCL
                 # Hold reward and value function mean value of sampled episodes from replay buffer
@@ -202,13 +205,14 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                 if worker.method == "PCL":
 
                     # Perform a rollout of the chosen environment
-                    episodes = worker.rolloutPCL(sess, s, rnn_state, max_path_length=1000, episode_count=len(worker.env))
+                    episodes = worker.rolloutPCL(sess, s, rnn_state, max_path_length=1000,
+                                                 episode_count=len(worker.env))
 
                     # Add sampled episode to replay buffer
                     worker.replay_buffer.add(episodes)
 
                     # Get rewards and value estimates of current sample
-                    _, _, r_ep, v_ep, _ , _ = unpack_episode(episodes)
+                    _, _, r_ep, v_ep, _, _ = unpack_episode(episodes)
 
                     episode_values = np.mean(np.sum(v_ep, axis=1))
                     episode_reward = np.mean(np.sum(r_ep, axis=1))
@@ -218,13 +222,12 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                     train_offline = True
 
                     if train_online:
-
                         # Train PCL agent
                         _, _, summary = worker.train_pcl(episodes, gamma, sess, merged_summary)
 
                         # Update summary information
                         train_steps = train_steps + 1
-                        #if worker.name == "worker_0":
+                        # if worker.name == "worker_0":
                         #    writer_summary.add_summary(summary, train_steps)
 
                     if train_offline:
@@ -240,14 +243,14 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         # Update learning rate based on calculated KL Divergence
                         if worker.update_learning_rate_:
                             # Calculate KL-Divergence of updated policy and policy before update
-                            kl_divergence = worker.calculate_kl_divergence(logits, sampled_episodes,sess)
+                            kl_divergence = worker.calculate_kl_divergence(logits, sampled_episodes, sess)
                             # Perform learning rate update based on KL-Divergence
                             worker.update_learning_rate(kl_divergence, sess)
 
                         # Update summary information
                         train_steps = train_steps + 1
                         if worker.name == "worker_0":
-                           writer.add_summary(summary, train_steps)
+                            writer.add_summary(summary, train_steps)
 
                         # Write add. summary information
                         episode_reward_offline = np.mean(np.sum(r_ep, axis=1))
@@ -268,7 +271,6 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         if PREPROCESSING:
                             s2 = U.process_frame(s2, IMAGE_SIZE_PREPROCESSED)
 
-
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
                         worker.add_to_batch(s, r, a, v, terminal)
 
@@ -285,11 +287,12 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                      worker.local_AC.lengths_episodes: dummy_lengths})
 
                             v_l, p_l, e_l, g_n, v_n, summary, logits = worker.train(worker.episode_states_train,
-                                                                          worker.episode_reward_train,
-                                                                          worker.episode_actions_train,
-                                                                          worker.episode_values_train,
-                                                                          worker.episode_done_train,
-                                                                          sess, gamma, np.squeeze(v1), merged_summary)
+                                                                                    worker.episode_reward_train,
+                                                                                    worker.episode_actions_train,
+                                                                                    worker.episode_values_train,
+                                                                                    worker.episode_done_train,
+                                                                                    sess, gamma, np.squeeze(v1),
+                                                                                    merged_summary)
 
                             if worker.env.all_done():
                                 # Update global network
@@ -298,7 +301,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                 # Update learning rate based on calculated KL Divergence
                                 if worker.update_learning_rate_:
                                     # Calculate KL-Divergence of updated policy and policy before update
-                                    kl_divergence = worker.calculate_kl_divergence(logits, worker.episode_states_train, sess, worker.episode_done_train)
+                                    kl_divergence = worker.calculate_kl_divergence(logits, worker.episode_states_train,
+                                                                                   sess, worker.episode_done_train)
                                     # Perform learning rate update based on KL-Divergence
                                     if not np.isnan(kl_divergence):
                                         worker.update_learning_rate(kl_divergence, sess)
@@ -334,38 +338,34 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                 episode_count += 1
 
-                if episode_count == EPISODE_RUNS:
-                    print("Worker stops because max episode runs are reached")
-                    sess.request_stop()
+                # if episode_count == EPISODE_RUNS:
+                #
+                #    sess.request_stop()
 
         # Ask for all the services to stop.
-        #sv.stop()
-
-
+        print("Worker stops because max episode runs are reached")
 
 
 if __name__ == '__main__':
-
-
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     parser.add_argument("job", choices=["ps", "worker"])
     parser.add_argument("task", type=int)
-    #parser.add_argument("--animate", default=False, action='store_true')
-    #parser.add_argument("--env", default='Pendulum-v0')
-    #parser.add_argument("--seed", default=12321, type=int)
+    # parser.add_argument("--animate", default=False, action='store_true')
+    # parser.add_argument("--env", default='Pendulum-v0')
+    # parser.add_argument("--seed", default=12321, type=int)
     parser.add_argument("--tboard", default=False)
     parser.add_argument("--worker_num", default=2, type=int)  # worker jobs
     parser.add_argument("--ps_num", default=1, type=int)  # ps jobs
     parser.add_argument("--initport", default=2849, type=int)  # starting ports for cluster
-    #parser.add_argument("--stdout_freq", default=20, type=int)
-    #parser.add_argument("--save_every", default=600, type=int)  # save frequency
-    #parser.add_argument("--outdir", default=os.path.join('tmp', 'logs'))  # file for the statistics of training
+    # parser.add_argument("--stdout_freq", default=20, type=int)
+    # parser.add_argument("--save_every", default=600, type=int)  # save frequency
+    # parser.add_argument("--outdir", default=os.path.join('tmp', 'logs'))  # file for the statistics of training
     parser.add_argument("--checkpoint_dir", default=os.path.join('tmp', 'checkpoints'))  # where to save checkpoint
     parser.add_argument("--frames", default=1, type=int)  # how many recent frames to send to model
-    #parser.add_argument("--mode", choices=["train", "debug-light", "debug-full"],
+    # parser.add_argument("--mode", choices=["train", "debug-light", "debug-full"],
     #                   default="train")  # how verbose to print to stdout
-    #parser.add_argument("--desired_kl", default=0.002, type=float)
+    # parser.add_argument("--desired_kl", default=0.002, type=float)
     parser.add_argument("--ps_hosts", default="", type=str)
     parser.add_argument("--worker_hosts", default="", type=str)
 

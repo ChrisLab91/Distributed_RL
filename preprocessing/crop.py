@@ -7,6 +7,7 @@ from tensorforce.core.preprocessing import Preprocessor
 
 
 
+
 class Crop(Preprocessor):
     """
     Crop image to size.

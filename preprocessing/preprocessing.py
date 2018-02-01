@@ -19,17 +19,10 @@ from __future__ import division
 
 from tensorforce import util
 
-
-#from preprocessor import Preprocessor
-
-#from tensorforce.core.preprocessing import Preprocessor
-#from tensorforce2.core.preprocessing import preprocessors as _preprocessors
-#import preprocessors as _preprocessors
-#from tensorforce2 import util
-#from preprocessor import Preprocessor
 from tensorforce.core.preprocessing import Preprocessor
 import tensorforce2.core.preprocessing
-#from preprocessing import preprocessors as _preprocessors
+
+
 
 
 
