@@ -17,7 +17,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from tensorforce2.core.preprocessing import Preprocessor
+from tensorforce.core.preprocessing import Preprocessor
 
 
 class Divide(Preprocessor):

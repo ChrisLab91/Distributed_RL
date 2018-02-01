@@ -60,16 +60,41 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         TOTAL_GLOBAL_EPISODES = 200
 
         # Gym environment
-        ENV_NAME = 'CartPole-v0'   # MsPacman CartPole
+        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole
         NUM_ENVS = 3
-        PREPROCESSING = False
+        PREPROCESSING = True
         IMAGE_SIZE_PREPROCESSED = 84
+
+        PREPROCESSING_CONFIG  = [
+                                    {
+                                        "type": "image_resize",
+                                        "width": IMAGE_SIZE_PREPROCESSED,
+                                        "height": IMAGE_SIZE_PREPROCESSED
+                                    }, {
+                                        "type": "grayscale"
+                                    }
+
+                                #     {
+                                #         "type": "sequence",         # TO-DO: sequence not supported
+                                #         "length": 2
+                                #     }
+                                ]
+
+        # Get env parameters
 
         gw = GymWrapper(ENV_NAME)
         ACTION_DIM = gw.act_space.n
 
         if PREPROCESSING:
             STATE_DIM = IMAGE_SIZE_PREPROCESSED * IMAGE_SIZE_PREPROCESSED
+            
+            types_of_preprocess = []
+            for operation in PREPROCESSING_CONFIG:
+                types_of_preprocess.append(operation['type'])
+                if operation['type'] == "sequence":
+                    length_sequence = operation['length']
+
+            print("Do following preprocessing steps: {0}".format(types_of_preprocess))
 
         else:
             STATE_DIM =  gw.obs_space.shape[0]
@@ -98,7 +123,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR_CHECKPOINT = os.getcwd() + "_modelcheckpoints"
 
         # Choose RL method (A3C, PCL)
-        METHOD = "PCL"
+        METHOD = "A3C"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -181,7 +206,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                 # Restart environment
                 s = worker.env.reset()
                 if PREPROCESSING:
-                    s = U.process_frame(s, IMAGE_SIZE_PREPROCESSED)
+                    s = U.process_frame(s, PREPROCESSING_CONFIG)
 
                 # Set initial rnn state based on number of episodes
                 c_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
@@ -261,7 +286,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         # Sample new state and reward from environment
                         s2, r, terminal, info = worker.env.step(act_)
                         if PREPROCESSING:
-                            s2 = U.process_frame(s2, IMAGE_SIZE_PREPROCESSED)
+                            s2 = U.process_frame(s2, PREPROCESSING_CONFIG)
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
                         worker.add_to_batch(s, r, a, v, terminal)

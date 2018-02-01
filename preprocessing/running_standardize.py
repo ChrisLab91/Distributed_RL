@@ -19,8 +19,7 @@ from __future__ import print_function
 
 import numpy as np
 
-from tensorforce2 import util
-from tensorforce2.core.preprocessing import Preprocessor
+from tensorforce.core.preprocessing import Preprocessor
 
 
 class RunningStandardize(Preprocessor):

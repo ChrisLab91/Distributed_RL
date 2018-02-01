@@ -17,9 +17,20 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
 
-from tensorforce2 import util
-from tensorforce2.core.preprocessing import Preprocessor
+from tensorforce import util
+
+
+#from preprocessor import Preprocessor
+
+#from tensorforce.core.preprocessing import Preprocessor
+#from tensorforce2.core.preprocessing import preprocessors as _preprocessors
+#import preprocessors as _preprocessors
+#from tensorforce2 import util
+#from preprocessor import Preprocessor
+from tensorforce.core.preprocessing import Preprocessor
 import tensorforce2.core.preprocessing
+#from preprocessing import preprocessors as _preprocessors
+
 
 
 class Preprocessing(object):
@@ -73,8 +84,8 @@ class Preprocessing(object):
         for spec in spec:
             preprocessor = util.get_object(
                 obj=spec,
-                predefined_objects=tensorforce2.core.preprocessing.preprocessors
+                predefined_objects=tensorforce2.core.preprocessing.preprocessors       #_preprocessors         #tensorforce.core.preprocessing.preprocessors
             )
-            assert isinstance(preprocessor, Preprocessor)
+            #assert isinstance(preprocessor, Preprocessor)
             preprocessing.add(preprocessor=preprocessor)
         return preprocessing
