@@ -73,6 +73,12 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         if PREPROCESSING:
             STATE_DIM = IMAGE_SIZE_PREPROCESSED * IMAGE_SIZE_PREPROCESSED
+            
+            types_of_preprocess = []
+            for operation in PREPROCESSING_CONFIG:
+                types_of_preprocess.append(operation['type'])
+                
+            print("Do following preprocessing steps: {0}".format(types_of_preprocess))
 
         else:
             STATE_DIM =  gw.obs_space.shape[0]
