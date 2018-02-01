@@ -66,32 +66,53 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         TOTAL_GLOBAL_EPISODES = 200
 
         # Gym environment
-        ENV_NAME = 'CartPole-v0'  # MsPacman CartPole
-        NUM_ENVS = 5
-        PREPROCESSING = False
-        IMAGE_SIZE_PREPROCESSED = 84
+
+        ENV_NAME = 'MsPacman-v0'  # MsPacman CartPole
+        NUM_ENVS = 2
+        PREPROCESSING = True
+        IMAGE_SIZE_PREPROCESSED = 35
+
+        PREPROCESSING_CONFIG = [
+            {
+                "type": "image_resize",
+                "width": IMAGE_SIZE_PREPROCESSED,
+                "height": IMAGE_SIZE_PREPROCESSED
+            }, {
+                "type": "grayscale"
+            }
+
+            #     {
+            #         "type": "sequence",         # TO-DO: sequence not supported
+            #         "length": 2
+            #     }
+        ]
+
+        # Get env parameters
 
         gw = GymWrapper(ENV_NAME)
         ACTION_DIM = gw.act_space.n
 
         if PREPROCESSING:
             STATE_DIM = IMAGE_SIZE_PREPROCESSED * IMAGE_SIZE_PREPROCESSED
-            
+
             types_of_preprocess = []
             for operation in PREPROCESSING_CONFIG:
                 types_of_preprocess.append(operation['type'])
-                
+                if operation['type'] == "sequence":
+                    length_sequence = operation['length']
+
             print("Do following preprocessing steps: {0}".format(types_of_preprocess))
 
         else:
+            PREPROCESSING_CONFIG = None
             STATE_DIM = gw.obs_space.shape[0]
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["RNN"],
+                              shared_config=dict(kind=["CNN"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
-                                                 cnn_output_size=20,
-                                                 dense_layers=[16, 16],
+                                                 cnn_output_size=8,
+                                                 dense_layers=[8, 8],
                                                  lstm_cell_units=16),
                               policy_config=dict(layers=[ACTION_DIM],
                                                  noise_dist="independent"),
@@ -132,7 +153,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             with tf.device(worker_device):
                 worker = Worker(TASK_ID, STATE_DIM, ACTION_DIM, network_config, LEARNING_RATE, global_episodes,
                                 ENV_NAME, number_envs=NUM_ENVS, tau=TAU, rollout=ROLLOUT, method=METHOD,
-                                update_learning_rate_=UPDATE_LEARNING_RATE, preprocessing_state=PREPROCESSING)
+                                update_learning_rate_=UPDATE_LEARNING_RATE, preprocessing_config=PREPROCESSING_CONFIG)
 
         # Get summary information
         if worker.name == "worker_0":
@@ -188,13 +209,16 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                 # Restart environment
                 s = worker.env.reset()
-                if PREPROCESSING:
-                    s = U.process_frame(s, IMAGE_SIZE_PREPROCESSED)
+                if worker.preprocessing_state:
+                    s = U.process_frame(s, worker.preprocessing_config)
 
-                # Set initial rnn state based on number of episodes
-                c_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
-                h_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
-                rnn_state = np.array([c_init, h_init])
+                if worker.rnn_network:
+                    # Set initial rnn state based on number of episodes
+                    c_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
+                    h_init = np.zeros((len(worker.env), worker.local_AC.cell_units), np.float32)
+                    rnn_state = np.array([c_init, h_init])
+                else:
+                    rnn_state = None
 
                 # sample new noisy parameters in fully connected layers if
                 # noisy net is used
@@ -268,8 +292,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         act_ = [np.argmax(a_) for a_ in a]
                         # Sample new state and reward from environment
                         s2, r, terminal, info = worker.env.step(act_)
-                        if PREPROCESSING:
-                            s2 = U.process_frame(s2, IMAGE_SIZE_PREPROCESSED)
+                        if worker.preprocessing_state:
+                            s2 = U.process_frame(s2, worker.preprocessing_config)
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
                         worker.add_to_batch(s, r, a, v, terminal)
@@ -280,11 +304,15 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                         # Train on mini batches from episode
                         if (episode_step_count % MINI_BATCH == 0 and episode_step_count > 0) or worker.env.all_done():
-                            v1 = sess.run([worker.local_AC.value],
-                                          feed_dict={worker.local_AC.inputs: s2,
-                                                     worker.local_AC.state_in[0]: rnn_state[0],
-                                                     worker.local_AC.state_in[1]: rnn_state[1],
-                                                     worker.local_AC.lengths_episodes: dummy_lengths})
+
+                            feed_dict_ = {worker.local_AC.inputs: s2,
+                                          worker.local_AC.lengths_episodes: dummy_lengths}
+
+                            if worker.rnn_network:
+                                feed_dict_[worker.local_AC.state_in[0]] = rnn_state[0]
+                                feed_dict_[worker.local_AC.state_in[1]] = rnn_state[1]
+
+                            v1 = sess.run([worker.local_AC.value], feed_dict_)
 
                             v_l, p_l, e_l, g_n, v_n, summary, logits = worker.train(worker.episode_states_train,
                                                                                     worker.episode_reward_train,
