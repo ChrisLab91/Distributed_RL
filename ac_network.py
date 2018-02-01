@@ -537,7 +537,7 @@ class AC_Network():
                 # Initializer of \mu and \sigma in case of factorized noise distribution
                 mu_init = tf.random_uniform_initializer(minval=-1*1/np.power(x_batch.get_shape().as_list()[2], 0.5),
                                                         maxval=1*1/np.power(x_batch.get_shape().as_list()[2], 0.5))
-                sigma_init = tf.constant_initializer(0.4/np.power(x.get_shape().as_list()[1], 0.5))
+                sigma_init = tf.constant_initializer(0.4/np.power(x_batch.get_shape().as_list()[2], 0.5))
 
                 def f(x):
                     return tf.multiply(tf.sign(x), tf.pow(tf.abs(x), 0.5))
