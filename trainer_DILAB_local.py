@@ -62,9 +62,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         # Gym environment
         
         ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole
-        NUM_ENVS = 3
+        NUM_ENVS = 2
         PREPROCESSING = True
-        IMAGE_SIZE_PREPROCESSED = 84
+        IMAGE_SIZE_PREPROCESSED = 35
 
         PREPROCESSING_CONFIG  = [
                                     {
@@ -98,13 +98,14 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             print("Do following preprocessing steps: {0}".format(types_of_preprocess))
 
         else:
+            PREPROCESSING_CONFIG = None
             STATE_DIM =  gw.obs_space.shape[0]
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["Dense"],
+                              shared_config=dict(kind=["CNN"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
-                                                 cnn_output_size=20,
+                                                 cnn_output_size=8,
                                                  dense_layers=[8, 8],
                                                  lstm_cell_units=16),
                               policy_config=dict(layers=[ACTION_DIM],
@@ -124,7 +125,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR_CHECKPOINT = os.getcwd() + "_modelcheckpoints"
 
         # Choose RL method (A3C, PCL)
-        METHOD = "A3C"
+        METHOD = "PCL"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -145,7 +146,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             with tf.device(worker_device):
                 worker = Worker(TASK_ID, STATE_DIM, ACTION_DIM, network_config, LEARNING_RATE, global_episodes,
                                 ENV_NAME, number_envs =  NUM_ENVS, tau = TAU, rollout= ROLLOUT, method=METHOD,
-                                update_learning_rate_=UPDATE_LEARNING_RATE, preprocessing_state = PREPROCESSING)
+                                update_learning_rate_=UPDATE_LEARNING_RATE, preprocessing_config = PREPROCESSING_CONFIG)
 
         # Get summary information
         if worker.name == "worker_0":
@@ -201,8 +202,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                 # Restart environment
                 s = worker.env.reset()
-                if PREPROCESSING:
-                    s = U.process_frame(s, PREPROCESSING_CONFIG)
+                if worker.preprocessing_state:
+                    s = U.process_frame(s, worker.preprocessing_config)
 
                 if worker.rnn_network:
                     # Set initial rnn state based on number of episodes
@@ -284,8 +285,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         act_ = [np.argmax(a_) for a_ in a]
                         # Sample new state and reward from environment
                         s2, r, terminal, info = worker.env.step(act_)
-                        if PREPROCESSING:
-                            s2 = U.process_frame(s2, PREPROCESSING_CONFIG)
+                        if worker.preprocessing_state:
+                            s2 = U.process_frame(s2, worker.preprocessing_config)
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
                         worker.add_to_batch(s, r, a, v, terminal)

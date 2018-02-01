@@ -106,8 +106,7 @@ class AC_Network():
 
               net = slim.conv2d(net, 64, [3, 3], scope='conv3')
 
-
-            reshaped_net = tf.reshape(net, shape=[tf.shape(self.inputs)[0], tf.shape(self.inputs)[1], 16*16*64]) 
+            reshaped_net = tf.reshape(net, shape=[tf.shape(self.inputs)[0], tf.shape(self.inputs)[1], np.prod(net.get_shape()[1:])])
 
             if len(shared_network_kind) == 1:
 

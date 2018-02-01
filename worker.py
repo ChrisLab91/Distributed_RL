@@ -86,7 +86,7 @@ def unpack_episode(sampled_eps):
 class Worker():
     def __init__(self, name, s_size, a_size, network_config, learning_rate, global_episodes,
                  env_name, number_envs = 1,
-                 tau = 0.0, rollout = 10, method = "A3C", update_learning_rate_ = True, preprocessing_state = False,
+                 tau = 0.0, rollout = 10, method = "A3C", update_learning_rate_ = True, preprocessing_config = None,
                  gae_lambda = 1.0):
 
         self.name = "worker_" + str(name)
@@ -116,7 +116,13 @@ class Worker():
         self.env = gym_wrapper.GymWrapper(env_name, count = number_envs)
         self.a_size = a_size
         self.s_size = s_size
-        self.preprocessing_state = preprocessing_state
+
+        if preprocessing_config is not None:
+            self.preprocessing_state = True
+            self.preprocessing_config = preprocessing_config
+        else:
+            self.preprocessing_state = False
+            self.preprocessing_config = None
 
         # Get information if RNN is used
         if "RNN" in network_config["shared_config"]["kind"]:
@@ -126,9 +132,7 @@ class Worker():
 
         # Get Noisy Net Information if applied
         self.noisy_policy = network_config["policy_config"]["noise_dist"]
-        self.policy_layers = len(network_config["policy_config"]["layers"])
         self.noisy_value = network_config["value_config"]["noise_dist"]
-        self.value_layers = len(network_config["value_config"]["layers"])
 
         # Desired KL-Divergence to update learning rate
         self.desired_kl = 0.002
@@ -395,7 +399,7 @@ class Worker():
             # Sample new state and reward from environment
             s2, r, terminal, info = self.env.step(act_)
             if self.preprocessing_state:
-                s2 = U.process_frame(s2, 84)
+                s2 = U.process_frame(s2, self.preprocessing_config)
             # Add states, rewards, actions, values and terminal information to PCL episode batch
             self.add_to_batch(s, r, a, v, terminal)
             for i in range(len(self.env)):
