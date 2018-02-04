@@ -57,13 +57,13 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         # Get all required Paramters
 
         # Running Paramters
-        TOTAL_GLOBAL_EPISODES = 200
+        TOTAL_GLOBAL_EPISODES = 2000
 
         # Gym environment
         
-        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole
-        NUM_ENVS = 2
-        PREPROCESSING = True
+        ENV_NAME = 'CartPole-v1'   # MsPacman CartPole
+        NUM_ENVS = 5
+        PREPROCESSING = False
         IMAGE_SIZE_PREPROCESSED = 35
 
         PREPROCESSING_CONFIG  = [
@@ -103,13 +103,13 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["CNN"],
+                              shared_config=dict(kind=["Dense"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
                                                  cnn_output_size=8,
                                                  dense_layers=[8, 8],
                                                  lstm_cell_units=16),
                               policy_config=dict(layers=[ACTION_DIM],
-                                                 noise_dist="independent"),
+                                                 noise_dist="factorized"),
                               value_config=dict(layers=[1],
                                                 noise_dist=None))
 
@@ -161,17 +161,18 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             sess.run(local_init_op)
 
         # Setup monitoring
-        #is_chief = (TASK_ID == 0)
-        #saverHook = tf.train.CheckpointSaverHook(checkpoint_dir = LOG_DIR_CHECKPOINT,
-        #                                         save_steps = 10,
-        #                                         saver = tf.train.Saver(sharded = True,
-        #                                                                max_to_keep = 1))
-        #stopHook = tf.train.StopAtStepHook(num_steps = TOTAL_GLOBAL_EPISODES)
+        is_chief = (TASK_ID == 0)
+        saverHook = tf.train.CheckpointSaverHook(checkpoint_dir = LOG_DIR_CHECKPOINT,
+                                                 save_steps = 10,
+                                                 saver = tf.train.Saver(sharded = True,
+                                                                        max_to_keep = 1))
+        # Setup stopping criteria
+        stopHook = tf.train.StopAtStepHook(num_steps = TOTAL_GLOBAL_EPISODES)
 
-        with tf.train.MonitoredTrainingSession(master=server.target) as sess:
-                                               #is_chief = is_chief,
-                                               #chief_only_hooks=[saverHook],
-                                               #hooks = [stopHook]) as sess:
+        with tf.train.MonitoredTrainingSession(master=server.target,
+                                               is_chief = is_chief,
+                                               chief_only_hooks=[saverHook],
+                                               hooks = [stopHook]) as sess:
 
             # Define input to worker.work( gamma, sess, coord, merged_summary, writer_summary)
             gamma = GAMMA
