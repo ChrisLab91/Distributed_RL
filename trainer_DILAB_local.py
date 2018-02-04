@@ -63,9 +63,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Gym environment
         
-        ENV_NAME = 'CartPole-v0'   # MsPacman CartPole
-        NUM_ENVS = 5
-        PREPROCESSING = False
+        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole
+        NUM_ENVS = 3
+        PREPROCESSING = True
         IMAGE_SIZE_PREPROCESSED = 35
 
         PREPROCESSING_CONFIG  = [
@@ -127,7 +127,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR_CHECKPOINT = os.getcwd() + "_modelcheckpoints"
 
         # Print latest checkpoint
-        checkpoint_sync = True
+        checkpoint_sync = False
 
         # Choose RL method (A3C, PCL)
         METHOD = "A3C"
