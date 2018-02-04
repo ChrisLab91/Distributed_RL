@@ -63,7 +63,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Gym environment
         
-        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole
+        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole SpaceInvaders
         NUM_ENVS = 3
         PREPROCESSING = True
         IMAGE_SIZE_PREPROCESSED = 35
@@ -129,6 +129,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         # Print latest checkpoint
         checkpoint_sync = False
 
+        # Print common info
+        print("ENV_NAME is {0}, ACTION_DIM is {1}, initial STATE_DIM is {2}".format(ENV_NAME, ACTION_DIM, STATE_DIM))
+        
         # Choose RL method (A3C, PCL)
         METHOD = "A3C"
         print("Run method: " + METHOD)
