@@ -174,7 +174,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='global'))
         saverHook = tf.train.CheckpointSaverHook(checkpoint_dir=LOG_DIR_CHECKPOINT,
                                                  save_steps=10,
-                                                 checkpoint_basename="A3C",
+                                                 checkpoint_basename=worker.method,
                                                  saver=saver)
 
         # Start Training
