@@ -17,12 +17,33 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
 
-from tensorforce import util
 
-from tensorforce.core.preprocessing import Preprocessor
-import tensorforce2.core.preprocessing
+from preprocessing.prep_util import get_object
 
+from preprocessing.preprocessor import Preprocessor
+from preprocessing.sequence import Sequence
+from preprocessing.standardize import Standardize
+from preprocessing.running_standardize import RunningStandardize
+from preprocessing.normalize import Normalize
+from preprocessing.grayscale import Grayscale
+from preprocessing.image_resize import ImageResize
+from preprocessing.divide import Divide
+from preprocessing.clip import Clip
+from preprocessing.crop import Crop
 
+from preprocessing.preprocess_error import PreprocessError
+
+_preprocessors = dict(
+    sequence=Sequence,
+    standardize=Standardize,
+    running_standardize=RunningStandardize,
+    normalize=Normalize,
+    grayscale=Grayscale,
+    image_resize=ImageResize,
+    divide=Divide,
+    clip=Clip,
+    crop=Crop,
+)
 
 
 
@@ -75,10 +96,10 @@ class Preprocessing(object):
 
         preprocessing = Preprocessing()
         for spec in spec:
-            preprocessor = util.get_object(
+            preprocessor = get_object(
                 obj=spec,
-                predefined_objects=tensorforce2.core.preprocessing.preprocessors       #_preprocessors         #tensorforce.core.preprocessing.preprocessors
+                predefined_objects=_preprocessors
             )
-            #assert isinstance(preprocessor, Preprocessor)
+            assert isinstance(preprocessor, Preprocessor)
             preprocessing.add(preprocessor=preprocessor)
         return preprocessing

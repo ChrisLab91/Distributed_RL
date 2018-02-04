@@ -16,11 +16,10 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+from preprocessing.preprocess_error import PreprocessError
 
 import numpy as np
-
-from tensorforce.core.preprocessing import Preprocessor
+from preprocessing.preprocessor import Preprocessor
 
 
 class Clip(Preprocessor):

@@ -4,8 +4,7 @@ import os
 import tensorflow as tf
 from skimage.color import rgb2gray
 
-from preprocessing import *
-#from tensorforce import util
+from preprocessing.preprocessing import Preprocessing
 
 
 def var_accounted_for(target, pred):
@@ -144,8 +143,6 @@ def process_frame(frame, PREPROCESSING_CONFIG):
     processed_frames = []
     for el in frame:
         s = stack.process(el[0])
-        #s = rgb2gray(el[0])
-        #s = scipy.misc.imresize(s,[IMAGE_SIZE_PREPROCESSED, IMAGE_SIZE_PREPROCESSED])
         s = np.reshape(s, [np.prod(s.shape)]) / 255.0
         s = np.expand_dims(s, 0)
         processed_frames.append(s)

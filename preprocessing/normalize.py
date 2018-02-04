@@ -16,11 +16,12 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+
 import numpy as np
 
-from tensorforce.core.preprocessing import Preprocessor
+from preprocessing import prep_util as util
+from preprocessing.preprocessor import Preprocessor
 
-epsilon = 1e-6
 
 class Normalize(Preprocessor):
     """
@@ -29,4 +30,4 @@ class Normalize(Preprocessor):
 
     def process(self, state):
         state = state.astype(np.float32)
-        return (state - state.min()) / (state.max() - state.min() + epsilon)
+        return (state - state.min()) / (state.max() - state.min() + util.epsilon)

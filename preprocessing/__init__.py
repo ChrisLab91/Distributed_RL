@@ -22,9 +22,7 @@ from grayscale import Grayscale
 from image_resize import ImageResize
 from divide import Divide
 from clip import Clip
-from preprocessing import Preprocessing
 from crop import Crop
-
 
 preprocessors = dict(
     sequence=Sequence,

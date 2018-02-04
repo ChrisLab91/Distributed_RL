@@ -19,9 +19,9 @@ from __future__ import print_function
 
 import numpy as np
 
-from tensorforce.core.preprocessing import Preprocessor
+from preprocessing import prep_util
+from preprocessing.preprocessor import Preprocessor
 
-epsilon = 1e-6
 
 class Standardize(Preprocessor):
     """
@@ -30,4 +30,4 @@ class Standardize(Preprocessor):
 
     def process(self, state):
         state = state.astype(np.float32)
-        return (state - state.mean()) / (state.std() + epsilon)
+        return (state - state.mean()) / (state.std() + util.epsilon)

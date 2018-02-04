@@ -16,19 +16,19 @@ for i_episode in range(30):
     action = env.action_space.sample()
     observation, reward, done, info = env.step(action)
 
-#def rgb2gray(rgb):
-#    return np.dot(rgb[..., :3], [0.299, 0.587, 0.114])
-#
-#def zeroandone(image, threshold):
-#    image = (image.astype(np.float32) // threshold)*threshold
-#    return image
+def rgb2gray(rgb):
+    return np.dot(rgb[..., :3], [0.299, 0.587, 0.114])
+
+def zeroandone(image, threshold):
+    image = (image.astype(np.float32) // threshold)*threshold
+    return image
 
 grayscale=Grayscale()
 imageresize=ImageResize(84, 84)
 sequence=Sequence(4)
 
 #observation=sequence.process(observation)
-observation=imageresize.process(observation)
+#observation=imageresize.process(observation)
 #observation=crop(observation,14,77,11,75)
 #observation=crop(observation,36,190,20,144)
 #imageresize=ImageResize(42,42)
@@ -52,5 +52,5 @@ print(observation)
 
 
 img = smp.toimage( observation )
-#smp.imsave('ong.png', img)
+smp.imsave('ong.png', img)
 img.show()
