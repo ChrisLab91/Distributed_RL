@@ -108,11 +108,11 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                               shared_config=dict(kind=["Dense"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
                                                  cnn_output_size=8,
-                                                 dense_layers=[2],
+                                                 dense_layers=[8],
                                                  lstm_cell_units=16),
-                              policy_config=dict(layers=[ACTION_DIM],
+                              policy_config=dict(layers=[4, ACTION_DIM],
                                                  noise_dist=None),
-                              value_config=dict(layers=[1],
+                              value_config=dict(layers=[4, 1],
                                                 noise_dist=None))
 
         # Learning rate
@@ -127,7 +127,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR_CHECKPOINT = os.getcwd() + "_modelcheckpoints"
 
         # Print latest checkpoint
-        checkpoint_sync = True
+        checkpoint_sync = False
 
         # Choose RL method (A3C, PCL)
         METHOD = "A3C"
@@ -184,7 +184,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                hooks = [stopHook]) as sess:
 
             # Reload global model from chief
-            if is_chief:
+            if is_chief and checkpoint_sync:
                 try:
                     saver.restore(sess, tf.train.latest_checkpoint(LOG_DIR_CHECKPOINT, latest_filename=None))
                 except ValueError:
