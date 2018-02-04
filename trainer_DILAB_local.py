@@ -1,5 +1,6 @@
 import argparse
 import sys
+import time
 import numpy as np
 import tensorflow.contrib.slim as slim
 import scipy.signal
@@ -8,6 +9,7 @@ import os
 import threading
 import multiprocessing
 import tensorflow as tf
+from tensorflow.python.tools.inspect_checkpoint import print_tensors_in_checkpoint_file
 
 import util as U
 
@@ -57,11 +59,11 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         # Get all required Paramters
 
         # Running Paramters
-        TOTAL_GLOBAL_EPISODES = 2000
+        TOTAL_GLOBAL_EPISODES = 2050
 
         # Gym environment
         
-        ENV_NAME = 'CartPole-v1'   # MsPacman CartPole
+        ENV_NAME = 'CartPole-v0'   # MsPacman CartPole
         NUM_ENVS = 5
         PREPROCESSING = False
         IMAGE_SIZE_PREPROCESSED = 35
@@ -106,10 +108,10 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                               shared_config=dict(kind=["Dense"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
                                                  cnn_output_size=8,
-                                                 dense_layers=[8, 8],
+                                                 dense_layers=[2],
                                                  lstm_cell_units=16),
                               policy_config=dict(layers=[ACTION_DIM],
-                                                 noise_dist="factorized"),
+                                                 noise_dist=None),
                               value_config=dict(layers=[1],
                                                 noise_dist=None))
 
@@ -124,8 +126,11 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR = os.getcwd() + '_tensorflowlogs'
         LOG_DIR_CHECKPOINT = os.getcwd() + "_modelcheckpoints"
 
+        # Print latest checkpoint
+        checkpoint_sync = True
+
         # Choose RL method (A3C, PCL)
-        METHOD = "PCL"
+        METHOD = "A3C"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -162,27 +167,47 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Setup monitoring
         is_chief = (TASK_ID == 0)
-        saverHook = tf.train.CheckpointSaverHook(checkpoint_dir = LOG_DIR_CHECKPOINT,
-                                                 save_steps = 10,
-                                                 saver = tf.train.Saver(sharded = True,
-                                                                        max_to_keep = 1))
-        # Setup stopping criteria
-        stopHook = tf.train.StopAtStepHook(num_steps = TOTAL_GLOBAL_EPISODES)
 
+        # Setup hooks required to coordinate training
+        stopHook = tf.train.StopAtStepHook(num_steps=TOTAL_GLOBAL_EPISODES)
+        saver = tf.train.Saver(max_to_keep=3,
+                               var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='global'))
+        saverHook = tf.train.CheckpointSaverHook(checkpoint_dir=LOG_DIR_CHECKPOINT,
+                                                 save_steps=10,
+                                                 checkpoint_basename="A3C",
+                                                 saver=saver)
+
+        # Start Training
         with tf.train.MonitoredTrainingSession(master=server.target,
                                                is_chief = is_chief,
                                                chief_only_hooks=[saverHook],
                                                hooks = [stopHook]) as sess:
 
-            # Define input to worker.work( gamma, sess, coord, merged_summary, writer_summary)
+            # Reload global model from chief
+            if is_chief:
+                try:
+                    saver.restore(sess, tf.train.latest_checkpoint(LOG_DIR_CHECKPOINT, latest_filename=None))
+                except ValueError:
+                    print("No Model Checkpoint available")
+
+            # If Checkpoint is loaded make sure all workers start after
+            # the variables have been reloaded in order to avoid "bad" updates
+            if checkpoint_sync:
+                while sess.run(worker.global_episodes) == 0:
+                    print(worker.name + " Waiting for Sync of Checkpoint loaded by worker_0")
+                    time.sleep(1)
+
+            # Update from global
+            sess.run(worker.update_local_ops)
+
+            # Define input to worker.work( gaxmma, sess, coord, merged_summary, writer_summary)
             gamma = GAMMA
 
             MINI_BATCH = 40
             REWARD_FACTOR = 0.001
             EPISODE_RUNS = 1000
 
-            #episode_count = sess.run(worker.global_episodes)
-            episode_count = 0
+            episode_count =  0
             total_steps = 0
             train_steps = 0
             print("Starting worker " + str(TASK_ID))
@@ -345,7 +370,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                     episode_reward = np.mean(np.sum(worker.episode_reward, axis=0))
 
                 if episode_count % 20 == 0:
-                    print("Reward: " + str(episode_reward), " | Episode", episode_count, " of " + worker.name)
+                    print("Reward: " + str(episode_reward), " | Episode", episode_count, " of " + worker.name, " | Global Episode",  str(sess.run(worker.global_episodes)))
                     if worker.method == "PCL":
                         print("Reward Offline: " + str(episode_reward_offline), " | Episode", episode_count,
                               " of " + worker.name)
@@ -357,10 +382,6 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                 sess.run(worker.increment)  # Next global episode
 
                 episode_count += 1
-
-                #if episode_count == EPISODE_RUNS:
-                #
-                #    sess.request_stop()
 
         # Ask for all the services to stop.
         print("Worker stops because max episode runs are reached")
