@@ -126,7 +126,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         LOG_DIR = os.getcwd() + '_tensorflowlogs'
         LOG_DIR_CHECKPOINT = os.getcwd() + "_modelcheckpoints"
 
-        # Print latest checkpoint
+        # Load latest checkpoint
         checkpoint_sync = False
 
         # Print common info
