@@ -123,12 +123,12 @@ class AC_Network():
             layers = self.shared_config["dense_layers"]
             
             net = slim.fully_connected(self.inputs, layers[0],
-                                         activation_fn=None,
+                                         activation_fn=f.nn.relu,
                                          weights_initializer=normalized_columns_initializer(1.0),
                                          biases_initializer=None)
             for units in layers[1:]:
                 net = slim.fully_connected(net, units,
-                                           activation_fn=None,
+                                           activation_fn=f.nn.relu,
                                            weights_initializer=normalized_columns_initializer(1.0),
                                            biases_initializer=None)
             if len(shared_network_kind) == 1:
