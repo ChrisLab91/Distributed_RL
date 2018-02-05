@@ -278,8 +278,26 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         # Sample len(envs) many episodes from the replay buffer
                         sampled_episodes = worker.replay_buffer.sample(episode_count=len(worker.env))
 
-                        # Train PCL agent
-                        r_ep, v_ep, summary, logits = worker.train_pcl(sampled_episodes, gamma, sess, merged_summary)
+                        _, _, _, _, min_len, _ = unpack_episode(episodes)
+
+
+                        rollout = worker.local_AC.rollout_pcl
+                        while rollout > min_len:
+                            rollout = int(rollout / 2)
+
+                        # for roll in [int(rollout/2), rollout, rollout *2]:
+                        for roll in [rollout]:
+                            if roll == 0 or roll > min_len:
+                                continue
+
+                            r_ep, v_ep, summary, logits = worker.train_pcl(sampled_episodes, gamma, sess,
+                                                                           merged_summary, roll)
+
+                            # Update summary information
+                            train_steps = train_steps + 1
+                            if worker.name == "worker_0":
+                                writer.add_summary(summary, train_steps)
+
                         # Update global network
                         sess.run(worker.update_local_ops)
 
@@ -290,10 +308,6 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                             # Perform learning rate update based on KL-Divergence
                             worker.update_learning_rate(kl_divergence, sess)
 
-                        # Update summary information
-                        train_steps = train_steps + 1
-                        if worker.name == "worker_0":
-                            writer.add_summary(summary, train_steps)
 
                         # Write add. summary information
                         episode_reward_offline = np.mean(np.sum(r_ep, axis=1))
@@ -310,16 +324,19 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         # Get action for every environment
                         act_ = [np.argmax(a_) for a_ in a]
                         # Sample new state and reward from environment
+
                         s2, r, terminal, info = worker.env.step(act_)
                         if worker.preprocessing_state:
                             s2 = U.process_frame(s2, worker.preprocessing_config)
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
-                        worker.add_to_batch(s, r, a, v, terminal)
-
                         # Get episode information for tracking the training process
                         worker.episode_values.append(v)
                         worker.episode_reward.append(r)
+
+                        r = np.maximum(np.minimum(r, 1), -1)
+                        worker.add_to_batch(s, r, a, v, terminal)
+                        episode_step_count += 1
 
                         # Train on mini batches from episode
                         if (episode_step_count % MINI_BATCH == 0 and episode_step_count > 0) or worker.env.all_done():
