@@ -63,24 +63,27 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Gym environment
 
-        ENV_NAME = 'SpaceInvaders-v0'  # MsPacman CartPole
+        ENV_NAME = 'MsPacman-v0'  # MsPacman CartPole SpaceInvaders
         NUM_ENVS = 3
         PREPROCESSING = True
-        IMAGE_SIZE_PREPROCESSED = 80
+        IMAGE_SIZE_PREPROCESSED = 35
 
         PREPROCESSING_CONFIG = [
+            {
+                "type": "crop",
+                "leftpx": 0,
+                "rightpx": 168,
+                "uppx": 0,
+                "downpx": 160
+            },
             {
                 "type": "image_resize",
                 "width": IMAGE_SIZE_PREPROCESSED,
                 "height": IMAGE_SIZE_PREPROCESSED
-            }, {
+            },
+            {
                 "type": "grayscale"
             }
-
-            #     {
-            #         "type": "sequence",         # TO-DO: sequence not supported
-            #         "length": 2
-            #     }
         ]
 
         # Get env parameters
@@ -89,6 +92,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         ACTION_DIM = gw.act_space.n
 
         if PREPROCESSING:
+
             STATE_DIM = IMAGE_SIZE_PREPROCESSED * IMAGE_SIZE_PREPROCESSED
 
             types_of_preprocess = []
@@ -96,27 +100,35 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                 types_of_preprocess.append(operation['type'])
                 if operation['type'] == "sequence":
                     length_sequence = operation['length']
+            if "grayscale" not in types_of_preprocess:
+                print("Doing full colors...")
+                STATE_DIM = IMAGE_SIZE_PREPROCESSED * IMAGE_SIZE_PREPROCESSED * 3
+                print("STATE_DIM: {0}".format(STATE_DIM))
 
-            print("Do following preprocessing steps: {0}".format(types_of_preprocess))
+            print("Doing following preprocessing steps: {0}".format(types_of_preprocess))
 
         else:
+
             PREPROCESSING_CONFIG = None
             STATE_DIM = gw.obs_space.shape[0]
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["CNN"],
+                              shared_config=dict(kind=["CNN", "RNN"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
-                                                 cnn_output_size=256,
-                                                 lstm_cell_units=16),
-                              policy_config=dict(layers=[ACTION_DIM],
+                                                 cnn_output_size=512,
+                                                 dense_layers=[8],
+                                                 lstm_cell_units=1024),
+                              policy_config=dict(layers=[512, ACTION_DIM],
                                                  noise_dist=None),
-                              value_config=dict(layers=[1],
+                              value_config=dict(layers=[512, 1],
                                                 noise_dist=None))
 
         # Learning rate
-        LEARNING_RATE = 0.01
-        UPDATE_LEARNING_RATE = False
+        LEARNING_RATE = 0.0001
+        UPDATE_LEARNING_RATE = True
+        # Discount rate for advantage estimation and reward discounting
+
         # Discount rate for advantage estimation and reward discounting
         GAMMA = 0.99
 
@@ -184,7 +196,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                hooks=[stopHook]) as sess:
 
             # Reload global model from chief
-            if is_chief:
+            if is_chief and checkpoint_sync:
                 try:
                     saver.restore(sess, tf.train.latest_checkpoint(LOG_DIR_CHECKPOINT, latest_filename=None))
                 except ValueError:
@@ -203,7 +215,11 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             # Define input to worker.work( gaxmma, sess, coord, merged_summary, writer_summary)
             gamma = GAMMA
 
-            MINI_BATCH = 40
+            # If TRAIN_ON_COMPLETE_EP complete Episodes are used to update
+            # A3C otherwise updates of size MINI_BATCH are performed
+            MINI_BATCH = 20
+            TRAIN_ON_COMPLETE_EP = False
+
             REWARD_FACTOR = 0.001
             EPISODE_RUNS = 1000
 
@@ -334,12 +350,54 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         worker.episode_values.append(v)
                         worker.episode_reward.append(r)
 
+                        # Clip advantages
                         r = np.maximum(np.minimum(r, 1), -1)
                         worker.add_to_batch(s, r, a, v, terminal)
                         episode_step_count += 1
 
                         # Train on mini batches from episode
-                        if (episode_step_count % MINI_BATCH == 0 and episode_step_count > 0) or worker.env.all_done():
+                        if not TRAIN_ON_COMPLETE_EP and ((episode_step_count % MINI_BATCH == 0 and episode_step_count > 0) or worker.env.all_done()):
+
+                            feed_dict_ = {worker.local_AC.inputs: s2,
+                                          worker.local_AC.lengths_episodes: dummy_lengths}
+
+                            if worker.rnn_network:
+                                feed_dict_[worker.local_AC.state_in[0]] = rnn_state[0]
+                                feed_dict_[worker.local_AC.state_in[1]] = rnn_state[1]
+
+                            v1 = sess.run([worker.local_AC.value], feed_dict_)
+
+                            v_l, p_l, e_l, g_n, v_n, summary, logits = worker.train(worker.episode_states_train,
+                                                                                    worker.episode_reward_train,
+                                                                                    worker.episode_actions_train,
+                                                                                    worker.episode_values_train,
+                                                                                    worker.episode_done_train,
+                                                                                    sess, gamma, np.squeeze(v1),
+                                                                                    merged_summary)
+
+                            if worker.env.all_done():
+                                # Update global network
+                                sess.run(worker.update_local_ops)
+
+                                # Update learning rate based on calculated KL Divergence
+                                if worker.update_learning_rate_:
+                                    # Calculate KL-Divergence of updated policy and policy before update
+                                    kl_divergence = worker.calculate_kl_divergence(logits, worker.episode_states_train,
+                                                                                   sess, worker.episode_done_train)
+                                    # Perform learning rate update based on KL-Divergence
+                                    if not np.isnan(kl_divergence):
+                                        worker.update_learning_rate(kl_divergence, sess)
+
+                            train_steps = train_steps + 1
+
+                            # Update summary information
+                            if worker.name == "worker_0":
+                                writer.add_summary(summary, train_steps)
+
+                            # Reset A3C minibatch after it has been used to update the model
+                            worker.reset_batch()
+
+                        elif TRAIN_ON_COMPLETE_EP and worker.env.all_done():
 
                             feed_dict_ = {worker.local_AC.inputs: s2,
                                           worker.local_AC.lengths_episodes: dummy_lengths}
@@ -407,32 +465,6 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         print("Worker stops because max episode runs are reached")
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-    parser.add_argument("job", choices=["ps", "worker"])
-    parser.add_argument("task", type=int)
-    # parser.add_argument("--animate", default=False, action='store_true')
-    # parser.add_argument("--env", default='Pendulum-v0')
-    # parser.add_argument("--seed", default=12321, type=int)
-    parser.add_argument("--tboard", default=False)
-    parser.add_argument("--worker_num", default=2, type=int)  # worker jobs
-    parser.add_argument("--ps_num", default=1, type=int)  # ps jobs
-    parser.add_argument("--initport", default=2849, type=int)  # starting ports for cluster
-    # parser.add_argument("--stdout_freq", default=20, type=int)
-    # parser.add_argument("--save_every", default=600, type=int)  # save frequency
-    # parser.add_argument("--outdir", default=os.path.join('tmp', 'logs'))  # file for the statistics of training
-    parser.add_argument("--checkpoint_dir", default=os.path.join('tmp', 'checkpoints'))  # where to save checkpoint
-    parser.add_argument("--frames", default=1, type=int)  # how many recent frames to send to model
-    # parser.add_argument("--mode", choices=["train", "debug-light", "debug-full"],
-    #                   default="train")  # how verbose to print to stdout
-    # parser.add_argument("--desired_kl", default=0.002, type=float)
-    parser.add_argument("--ps_hosts", default="", type=str)
-    parser.add_argument("--worker_hosts", default="", type=str)
-
-    args = parser.parse_args()
-
-    main(args.job, args.task, args.worker_num, args.ps_num, args.initport, args.ps_hosts, args.worker_hosts)
 if __name__ == '__main__':
 
 

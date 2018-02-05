@@ -6,7 +6,7 @@ import tensorflow as tf
 
 # Cell units
 ENTROPY_REGULARIZATION = True
-ENTROPY_REGULARIZATION_LAMBDA = 0.1
+ENTROPY_REGULARIZATION_LAMBDA = 0.01
 
 ####
 #NETWORK
@@ -36,8 +36,8 @@ class AC_Network():
         # Read optimizer config
         if self.scope != "global":
             self.lr = tf.Variable(initial_value=learning_rate, dtype=tf.float32, trainable=False)
-            self.trainer_pol = tf.train.AdamOptimizer(learning_rate=self.lr)
-            self.trainer_val = tf.train.AdamOptimizer(learning_rate=self.lr * 0.5)
+            self.trainer_pol = tf.train.AdamOptimizer(learning_rate=self.lr)#, epsilon=1e-3)
+            self.trainer_val = tf.train.AdamOptimizer(learning_rate=self.lr * 0.5)#, epsilon=1e-3)
             self.new_learning_rate = tf.placeholder(shape=(), dtype=tf.float32)
             self.lr_update = self.lr.assign(self.new_learning_rate)
 
@@ -123,12 +123,12 @@ class AC_Network():
             layers = self.shared_config["dense_layers"]
             
             net = slim.fully_connected(self.inputs, layers[0],
-                                         activation_fn=f.nn.relu,
+                                         activation_fn=tf.nn.relu,
                                          weights_initializer=normalized_columns_initializer(1.0),
                                          biases_initializer=None)
             for units in layers[1:]:
                 net = slim.fully_connected(net, units,
-                                           activation_fn=f.nn.relu,
+                                           activation_fn=tf.nn.relu,
                                            weights_initializer=normalized_columns_initializer(1.0),
                                            biases_initializer=None)
             if len(shared_network_kind) == 1:
@@ -310,8 +310,9 @@ class AC_Network():
                     value_loss_array_init = tf.TensorArray(tf.float32, size=length_batch, clear_after_read=False)
                     # Function to compute the value loss for all episodes
                     def compute_value_loss(i, ta):
-                        value_loss_temp = 0.5 * tf.reduce_sum(
-                            tf.square(self.target_v[i][:self.lengths_episodes[i]] - self.value[i][:self.lengths_episodes[i]]))
+                        #value_loss_temp = 0.5 * tf.reduce_sum(
+                        #    tf.square(self.target_v[i][:self.lengths_episodes[i]] - self.value[i][:self.lengths_episodes[i]]))
+                        value_loss_temp = tf.nn.l2_loss(self.target_v[i][:self.lengths_episodes[i]] - self.value[i][:self.lengths_episodes[i]])
                         return i + 1, ta.write(i, value_loss_temp)
 
                     # Loop over all episodes
@@ -332,7 +333,7 @@ class AC_Network():
                     # Function to compute the value loss for all episodes
                     def compute_policy_loss(i, ta):
                         responsible_outputs_temp = tf.reduce_sum(self.policy[i][:self.lengths_episodes[i]] * self.actions[i][:self.lengths_episodes[i]], [1])
-                        policy_loss_temp = -tf.reduce_sum(tf.log(tf.maximum(responsible_outputs_temp, 1e-12)) * self.advantages[i][:self.lengths_episodes[i]])
+                        policy_loss_temp = -tf.reduce_sum(tf.log(tf.maximum(responsible_outputs_temp, 1e-6)) * self.advantages[i][:self.lengths_episodes[i]])
                         return i+1, ta.write(i, policy_loss_temp)
 
                      # Loop over all episodes
@@ -353,7 +354,7 @@ class AC_Network():
 
                     # Compute entropy
                     def compute_entropy(i, ta):
-                        entropy_temp = tf.reduce_sum(self.policy[i][:self.lengths_episodes[i]] * tf.log(tf.maximum(self.policy[i][:self.lengths_episodes[i]], 1e-12)))
+                        entropy_temp = tf.reduce_sum(self.policy[i][:self.lengths_episodes[i]] * tf.log(tf.maximum(self.policy[i][:self.lengths_episodes[i]], 1e-6)))
                         return i + 1, ta.write(i, entropy_temp)
 
                     _, entropy_array = tf.while_loop(
@@ -387,6 +388,7 @@ class AC_Network():
             self.gradients = tf.gradients(self.loss, local_vars)
             self.var_norms = tf.global_norm(local_vars)
             grads, self.grad_norms = tf.clip_by_global_norm(self.gradients, 100.0)
+            #grads, self.grad_norms = tf.clip_by_average_norm(self.gradients, 0.1)
 
             # Apply local gradients to global network
             global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
@@ -526,6 +528,8 @@ class AC_Network():
                               self.lr)
             tf.summary.scalar("reward_" + self.scope,
                               tf.reduce_mean(tf.reduce_sum(self.rewards, axis=1)))
+            tf.summary.scalar("predicted_reward_" + self.scope,
+                              tf.reduce_mean(tf.reduce_mean(self.value, axis=1)))
 
             if method == "A3C":
                 tf.summary.histogram('advantage_' + self.scope,
@@ -534,10 +538,12 @@ class AC_Network():
                                      self.target_v)
                 tf.summary.scalar('advantage_aggregated_' + self.scope,
                                   tf.reduce_mean(tf.reduce_sum(self.advantages, axis=1)))
-                tf.summary.scalar('target_values_aggregated_' + self.scope,
-                              tf.reduce_mean(tf.reduce_sum(self.target_v, axis=1)))
+                tf.summary.scalar('target_values_predict_' + self.scope,
+                              tf.reduce_mean(tf.reduce_mean(self.target_v, axis=1)))
                 tf.summary.scalar("entropy_" + self.scope,
                                   self.entropy)
+                tf.summary.histogram("Grad_Norms_" + self.scope,
+                                     self.grad_norms)
 
 
 

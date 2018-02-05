@@ -13,17 +13,9 @@ import util as U
 from ac_network import AC_Network
 from replay_buffer import ReplayBuffer
 
-#WORKER
-# PARAMETERS
-# Clipping ratio for gradients
 
-# Size of mini batches to run training on
-MINI_BATCH = 40
-REWARD_FACTOR = 0.01
-EPISODE_RUNS = 1000
+REWARD_FACTOR = 1
 
-# Gym environment
-ENV_NAME = 'CartPole-v0'  # Discrete (4, 2)
 
 # Copies one set of variables to another.
 # Used to set worker network parameters to those of global network.
@@ -157,8 +149,13 @@ class Worker():
 
         # Here we take the rewards and values from the rollout, and use them to
         # generate the advantage and discounted returns.
-        rewards_list = [np.asarray(rewards[i].tolist()[:lengths_rollouts[i]]) * REWARD_FACTOR for i in range(batch_size)]
-        discounted_rewards = [discounting(rewards_list[i], gamma) for i in range(batch_size)]
+        rewards_list = []
+        for i in range(batch_size):
+            if not self.env.dones[i]:
+                rewards_list.append(np.asarray(rewards[i].tolist()[:lengths_rollouts[i]] + [r[i]]) * REWARD_FACTOR)
+            else:
+                rewards_list.append(np.asarray(rewards[i].tolist()[:lengths_rollouts[i]] + [0]) * REWARD_FACTOR)
+        discounted_rewards = [discounting(rewards_list[i], gamma)[:-1] for i in range(batch_size)]
 
         # Advantage estimation
         # JS, P Moritz, S Levine, M Jordan, P Abbeel,
