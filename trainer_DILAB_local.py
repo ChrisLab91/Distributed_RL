@@ -63,9 +63,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Gym environment
         
-        ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole SpaceInvaders
-        NUM_ENVS = 3
-        PREPROCESSING = True
+        ENV_NAME = 'CartPole-v0'   # MsPacman CartPole SpaceInvaders
+        NUM_ENVS = 5
+        PREPROCESSING = False
         IMAGE_SIZE_PREPROCESSED = 35
 
         PREPROCESSING_CONFIG  = [
@@ -116,7 +116,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                 noise_dist=None))
 
         # Learning rate
-        LEARNING_RATE = 0.005
+        LEARNING_RATE = 0.01
         UPDATE_LEARNING_RATE = True
         # Discount rate for advantage estimation and reward discounting
         GAMMA = 0.99
@@ -133,7 +133,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         print("ENV_NAME is {0}, ACTION_DIM is {1}, initial STATE_DIM is {2}".format(ENV_NAME, ACTION_DIM, STATE_DIM))
         
         # Choose RL method (A3C, PCL)
-        METHOD = "A3C"
+        METHOD = "PCL"
         print("Run method: " + METHOD)
 
         # PCL variables
@@ -176,7 +176,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         saver = tf.train.Saver(max_to_keep=3,
                                var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='global'))
         saverHook = tf.train.CheckpointSaverHook(checkpoint_dir=LOG_DIR_CHECKPOINT,
-                                                 save_steps=10,
+                                                 save_steps=1000,
                                                  checkpoint_basename=worker.method,
                                                  saver=saver)
 
@@ -206,9 +206,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
             # Define input to worker.work( gaxmma, sess, coord, merged_summary, writer_summary)
             gamma = GAMMA
 
-            MINI_BATCH = 40
-            REWARD_FACTOR = 0.001
-            EPISODE_RUNS = 1000
+            MINI_BATCH = 20
 
             episode_count =  0
             total_steps = 0
@@ -280,9 +278,26 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
                         # Sample len(envs) many episodes from the replay buffer
                         sampled_episodes = worker.replay_buffer.sample(episode_count=len(worker.env))
+                        _, _, _, _, min_len, _ = unpack_episode(episodes)
 
                         # Train PCL agent
-                        r_ep, v_ep, summary, logits = worker.train_pcl(sampled_episodes, gamma, sess, merged_summary)
+                        # On different rollout-lens
+                        rollout = worker.local_AC.rollout_pcl
+                        while rollout > min_len:
+                            rollout = int(rollout / 2)
+
+                        #for roll in [int(rollout/2), rollout, rollout *2]:
+                        for roll in [rollout]:
+                            if roll == 0 or roll > min_len:
+                                continue
+
+                            r_ep, v_ep, summary, logits = worker.train_pcl(sampled_episodes, gamma, sess, merged_summary, roll)
+
+                            # Update summary information
+                            train_steps = train_steps + 1
+                            if worker.name == "worker_0":
+                                writer.add_summary(summary, train_steps)
+
                         # Update global network
                         sess.run(worker.update_local_ops)
 
@@ -293,10 +308,6 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                             # Perform learning rate update based on KL-Divergence
                             worker.update_learning_rate(kl_divergence, sess)
 
-                        # Update summary information
-                        train_steps = train_steps + 1
-                        if worker.name == "worker_0":
-                           writer.add_summary(summary, train_steps)
 
                         # Write add. summary information
                         episode_reward_offline = np.mean(np.sum(r_ep, axis=1))
@@ -318,7 +329,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                             s2 = U.process_frame(s2, worker.preprocessing_config)
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
+                        r = np.maximum(np.minimum(r, 1), -1)
                         worker.add_to_batch(s, r, a, v, terminal)
+                        episode_step_count += 1
 
                         # Get episode information for tracking the training process
                         worker.episode_values.append(v)
@@ -367,7 +380,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         # Set previous state for next step
                         s = s2
                         total_steps += 1
-                        episode_step_count += 1
+
 
                     episode_values = np.mean(np.sum(worker.episode_values, axis=0))
                     episode_reward = np.mean(np.sum(worker.episode_reward, axis=0))

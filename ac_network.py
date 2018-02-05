@@ -178,25 +178,52 @@ class AC_Network():
 
         with tf.variable_scope("value_net"):
             if noise_dist is None:
+
+                if len(layers) == 1:
+                    act_fun=None
+                else:
+                    act_fun=tf.nn.relu
+
                 value = slim.fully_connected(inputs_shared, layers[0],
-                                             activation_fn=None,
+                                             activation_fn=act_fun,
                                              weights_initializer=normalized_columns_initializer(1.0),
                                              biases_initializer=None)
-                for units in layers[1:]:
+
+                for units, i in  zip(layers[1:], range(len(layers[1:]))):
+
+                    # Make sure last layer has the identity function as
+                    # activation
+                    if len(layers[1:])-1 == i:
+                        act_fun = None
+                    else:
+                        act_fun = tf.nn.relu
+
                     value = slim.fully_connected(value, units,
-                                                 activation_fn=None,
+                                                 activation_fn=act_fun,
                                                  weights_initializer=normalized_columns_initializer(1.0),
                                                  biases_initializer=None)
 
             else:
+                if len(layers) == 1:
+                    act_fun=tf.identity
+                else:
+                    act_fun=tf.nn.relu
+
                 value = self.noisy_dense(inputs_shared, layers[0],
                                     name="noise_value_" + str(0),
-                                    bias=True, activation_fn=tf.identity,
+                                    bias=True, activation_fn=act_fun,
                                     noise_dist=noise_dist)
+
                 for units, i in zip(layers[1:], range(len(layers[1:]))):
+
+                    if len(layers[1:])-1 == i:
+                        act_fun = tf.identity
+                    else:
+                        act_fun = tf.nn.relu
+
                     value = self.noisy_dense(value, units,
                                         name="noise_value_" + str(i + 1),
-                                        bias=True, activation_fn=tf.identity,
+                                        bias=True, activation_fn=act_fun,
                                         noise_dist=noise_dist)
 
         return value
@@ -210,24 +237,53 @@ class AC_Network():
 
         with tf.variable_scope("policy_net"):
             if noise_dist is None:
+
+                if len(layers) == 1:
+                    act_fun=tf.nn.softmax
+                else:
+                    act_fun=tf.nn.relu
+
                 policy = slim.fully_connected(inputs_shared, layers[0],
-                                              activation_fn=tf.nn.softmax,
+                                              activation_fn=act_fun,
                                               weights_initializer=normalized_columns_initializer(0.01),
                                               biases_initializer=None)
-                for units in layers[1:]:
+
+                for units, i in zip(layers[1:], range(len(layers[1:]))):
+
+                    # Make sure last layer has the identity function as
+                    # activation
+                    if len(layers[1:])-1 == i:
+                        act_fun = tf.nn.softmax
+                    else:
+                        act_fun = tf.nn.relu
+
                     policy = slim.fully_connected(policy, units,
-                                                  activation_fn=tf.nn.softmax,
+                                                  activation_fn=act_fun,
                                                   weights_initializer=normalized_columns_initializer(0.01),
                                                   biases_initializer=None)
             else:
+
+                if len(layers) == 1:
+                    act_fun = tf.nn.softmax
+                else:
+                    act_fun = tf.nn.relu
+
                 policy = self.noisy_dense(inputs_shared, layers[0],
                                      name="noise_action_" + str(0),
-                                     bias=True, activation_fn=tf.nn.softmax,
+                                     bias=True, activation_fn=act_fun,
                                      noise_dist=noise_dist)
                 for units, i in zip(layers[1:], range(len(layers[1:]))):
+
+                    # Make sure last layer has the identity function as
+                    # activation
+                    if len(layers[1:])-1 == i:
+                        act_fun = tf.nn.softmax
+                    else:
+                        act_fun = tf.nn.relu
+
                     policy = self.noisy_dense(policy, units,
                                          name="noise_action_" + str(i + 1),
-                                         bias=True, activation_fn=tf.nn.softmax,
+                                         bias=True, activation_fn=act_fun,
                                          noise_dist=noise_dist)
 
         return policy
@@ -330,7 +386,7 @@ class AC_Network():
             local_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
             self.gradients = tf.gradients(self.loss, local_vars)
             self.var_norms = tf.global_norm(local_vars)
-            grads, self.grad_norms = tf.clip_by_global_norm(self.gradients, 40.0)
+            grads, self.grad_norms = tf.clip_by_global_norm(self.gradients, 100.0)
 
             # Apply local gradients to global network
             global_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'global')
@@ -470,6 +526,20 @@ class AC_Network():
                               self.lr)
             tf.summary.scalar("reward_" + self.scope,
                               tf.reduce_mean(tf.reduce_sum(self.rewards, axis=1)))
+
+            if method == "A3C":
+                tf.summary.histogram('advantage_' + self.scope,
+                                     self.advantages)
+                tf.summary.histogram('target_values_' + self.scope,
+                                     self.target_v)
+                tf.summary.scalar('advantage_aggregated_' + self.scope,
+                                  tf.reduce_mean(tf.reduce_sum(self.advantages, axis=1)))
+                tf.summary.scalar('target_values_aggregated_' + self.scope,
+                              tf.reduce_mean(tf.reduce_sum(self.target_v, axis=1)))
+                tf.summary.scalar("entropy_" + self.scope,
+                                  self.entropy)
+
+
 
     # Calculate KL-Divergence based on the old and new policy
     def calculate_kl_divergence(self, old_policy, new_policy, episode_lengths):

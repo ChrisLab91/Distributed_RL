@@ -19,7 +19,7 @@ from replay_buffer import ReplayBuffer
 
 # Size of mini batches to run training on
 MINI_BATCH = 40
-REWARD_FACTOR = 0.001
+REWARD_FACTOR = 0.01
 EPISODE_RUNS = 1000
 
 # Gym environment
@@ -151,6 +151,9 @@ class Worker():
 
         # Get max_len
         max_len = len(states[0])
+        for i in range(len(lengths_rollouts)):
+            if lengths_rollouts[i] != max_len and lengths_rollouts[i] != 0:
+                lengths_rollouts[i] = lengths_rollouts[i] + 1
 
         # Here we take the rewards and values from the rollout, and use them to
         # generate the advantage and discounted returns.
@@ -181,6 +184,7 @@ class Worker():
                                         for i in range(batch_size)]
         padded_discounted_advantages = np.stack(padded_discounted_advantages)
 
+        # Test with classic future reward
         padded_discounted_rewards = [np.pad(discounted_rewards[i], [(0, max_len - lengths_rollouts[i])], mode="constant")
                                      for i in range(batch_size)]
         padded_discounted_rewards = np.stack(padded_discounted_rewards)
@@ -205,14 +209,26 @@ class Worker():
 
         summary = None
         if self.name == "worker_0":
-            summary, v_l, p_l, e_l, g_n, v_n, _, logits = sess.run([merged_summary, self.local_AC.value_loss,
+            summary, v_l, p_l, e_l, g_n, v_n, _, logits, val = sess.run([merged_summary, self.local_AC.value_loss,
                                                                    self.local_AC.policy_loss,
                                                                    self.local_AC.entropy,
                                                                    self.local_AC.grad_norms,
                                                                    self.local_AC.var_norms,
                                                                    self.local_AC.apply_grads,
-                                                                   self.local_AC.policy],
+                                                                   self.local_AC.policy,
+                                                                   self.local_AC.value],
                                                                   feed_dict=feed_dict)
+            """
+            print(np.shape(states))
+            print(np.count_nonzero(np.sum(states[0], 1)))
+            print(np.count_nonzero(val[0]))
+            print(terminal[0])
+            print(sum(-1 * (terminal[0]-1)))
+            print(len(discounted_rewards[0]))
+            print(lengths_rollouts[0])
+            print(np.shape(val))
+            print(np.shape(discounted_rewards))
+            """
         else:
             v_l, p_l, e_l, g_n, v_n, _, logits = sess.run([self.local_AC.value_loss,
                                                             self.local_AC.policy_loss,
@@ -226,15 +242,16 @@ class Worker():
         return v_l , p_l , e_l , g_n, v_n, summary, logits
 
     # Training operations PCL
-    def train_pcl(self, episodes, gamma, sess, merged_summary):
+    def train_pcl(self, episodes, gamma, sess, merged_summary, rollout):
 
         # Train on sampled episodes
-
         a_ep, s_ep, r_ep, v_ep, min_len, lens_seqs = unpack_episode(episodes)
 
+        """
         rollout = self.local_AC.rollout_pcl
         while rollout > min_len:
             rollout = int(rollout / 2)
+        """
 
         # Get required discounting multipliers
         discount = np.array([gamma ** i for i in range(rollout)], dtype=np.float32)
