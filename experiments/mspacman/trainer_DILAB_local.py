@@ -66,7 +66,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         ENV_NAME = 'MsPacman-v0'   # MsPacman CartPole SpaceInvaders
         NUM_ENVS = 3
         PREPROCESSING = True
-        IMAGE_SIZE_PREPROCESSED = 35
+        IMAGE_SIZE_PREPROCESSED = 80
 
         PREPROCESSING_CONFIG  = [   
                                     {
@@ -118,11 +118,12 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                               shared_config=dict(kind=["CNN", "RNN"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
                                                  cnn_output_size=8,
+                                                 use_dense_on_top_of_cnn=False,
                                                  dense_layers=[8],
                                                  lstm_cell_units=1024),
-                              policy_config=dict(layers=[4, ACTION_DIM],
+                              policy_config=dict(layers=[512, ACTION_DIM],
                                                  noise_dist=None),
-                              value_config=dict(layers=[4, 1],
+                              value_config=dict(layers=[512, 1],
                                                 noise_dist=None))
 
         # Learning rate

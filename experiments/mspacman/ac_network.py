@@ -125,10 +125,15 @@ class AC_Network():
                 hidden = slim.fully_connected(reshaped_net, self.shared_config["cnn_output_size"], activation_fn=tf.nn.elu)
                 return hidden
 
-            else:
+            if self.shared_config["use_dense_on_top_of_cnn"]:
 
                 hidden = slim.fully_connected(reshaped_net, self.shared_config["lstm_cell_units"], activation_fn=tf.nn.elu)
                 rnn_in = hidden
+
+            else:
+              
+                rnn_in = reshaped_net
+
 
         if "Dense" in shared_network_kind:
 
