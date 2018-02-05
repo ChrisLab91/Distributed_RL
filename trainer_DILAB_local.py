@@ -329,13 +329,13 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                             s2 = U.process_frame(s2, worker.preprocessing_config)
 
                         # Add states, rewards, actions, values and terminal information to A3C minibatch
-                        r = np.maximum(np.minimum(r, 1), -1)
-                        worker.add_to_batch(s, r, a, v, terminal)
-                        episode_step_count += 1
-
                         # Get episode information for tracking the training process
                         worker.episode_values.append(v)
                         worker.episode_reward.append(r)
+
+                        r = np.maximum(np.minimum(r, 1), -1)
+                        worker.add_to_batch(s, r, a, v, terminal)
+                        episode_step_count += 1
 
                         # Train on mini batches from episode
                         if (episode_step_count % MINI_BATCH == 0 and episode_step_count > 0) or worker.env.all_done():
