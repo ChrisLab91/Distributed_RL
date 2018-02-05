@@ -8,6 +8,7 @@ import os
 import threading
 import multiprocessing
 import tensorflow as tf
+import time
 
 import util as U
 
@@ -58,19 +59,19 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
     # Check if we have a worker or ps node running
     if JOB == 'ps':
         server.join()
-        else:
+    else:
 
         # Get all required Paramters
 
         # Running Paramters
-        TOTAL_GLOBAL_EPISODES = 2050
+        TOTAL_GLOBAL_EPISODES = 100000
 
         # Gym environment
 
-        ENV_NAME = 'CartPole-v0'  # MsPacman CartPole
-        NUM_ENVS = 5
-        PREPROCESSING = False
-        IMAGE_SIZE_PREPROCESSED = 35
+        ENV_NAME = 'SpaceInvaders-v0'  # MsPacman CartPole
+        NUM_ENVS = 3
+        PREPROCESSING = True
+        IMAGE_SIZE_PREPROCESSED = 80
 
         PREPROCESSING_CONFIG = [
             {
@@ -109,10 +110,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["Dense"],
+                              shared_config=dict(kind=["CNN"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
-                                                 cnn_output_size=8,
-                                                 dense_layers=[2],
+                                                 cnn_output_size=256,
                                                  lstm_cell_units=16),
                               policy_config=dict(layers=[ACTION_DIM],
                                                  noise_dist=None),
@@ -120,8 +120,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                                                 noise_dist=None))
 
         # Learning rate
-        LEARNING_RATE = 0.005
-        UPDATE_LEARNING_RATE = True
+        LEARNING_RATE = 0.01
+        UPDATE_LEARNING_RATE = False
         # Discount rate for advantage estimation and reward discounting
         GAMMA = 0.99
 
@@ -139,7 +139,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # PCL variables
         TAU = 0.2
-        ROLLOUT = 10
+        ROLLOUT = 5
         # Define the global network and get relevant worker_device
         worker_device = '/job:worker/task:{}/cpu:0'.format(TASK_ID)
 
@@ -178,7 +178,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
         saver = tf.train.Saver(max_to_keep=3,
                                var_list=tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='global'))
         saverHook = tf.train.CheckpointSaverHook(checkpoint_dir=LOG_DIR_CHECKPOINT,
-                                                 save_steps=10,
+                                                 save_steps=200,
                                                  checkpoint_basename=worker.method,
                                                  saver=saver)
 
