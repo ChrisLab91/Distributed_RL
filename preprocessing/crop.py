@@ -20,7 +20,7 @@ class Crop(Preprocessor):
         self.size = (rightpx-leftpx, downpx-uppx)
 
     def process(self, state):
-        state = state[self.leftpx:self.rightpx, self.uppx:self.downpx]
+        state = state[self.uppx:self.downpx, self.leftpx:self.rightpx]
         return state
 
     def processed_shape(self, shape):
