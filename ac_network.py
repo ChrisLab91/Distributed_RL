@@ -36,7 +36,8 @@ class AC_Network():
         # Read optimizer config
         if self.scope != "global":
             self.lr = tf.Variable(initial_value=learning_rate, dtype=tf.float32, trainable=False)
-            self.trainer_pol = tf.train.AdamOptimizer(learning_rate=self.lr)#, epsilon=1e-3)
+            #self.trainer_pol = tf.train.AdamOptimizer(learning_rate=self.lr)#, epsilon=1e-3)
+            self.trainer_pol = tf.train.RMSPropOptimizer(learning_rate=self.lr, decay=.99)
             self.trainer_val = tf.train.AdamOptimizer(learning_rate=self.lr * 0.5)#, epsilon=1e-3)
             self.new_learning_rate = tf.placeholder(shape=(), dtype=tf.float32)
             self.lr_update = self.lr.assign(self.new_learning_rate)
@@ -98,13 +99,13 @@ class AC_Network():
             with slim.arg_scope([slim.conv2d], padding='VALID', 
                                 activation_fn=tf.nn.relu):
 
-              net = slim.conv2d(self.image, 32, [5, 5], scope='conv1')
-              net = slim.max_pool2d(net, max_pool_size, scope='pool1')
+              net = slim.conv2d(self.image, 16, [8, 8], stride = 4, scope='conv1')
+              #net = slim.max_pool2d(net, max_pool_size, scope='pool1')
 
-              net = slim.conv2d(net, 32, [4, 4], scope='conv2')
-              net = slim.max_pool2d(net, max_pool_size, scope='pool2')
+              net = slim.conv2d(net, 32, [4, 4], stride = 2, scope='conv2')
+              #net = slim.max_pool2d(net, max_pool_size, scope='pool2')
 
-              net = slim.conv2d(net, 64, [3, 3], scope='conv3')
+              #net = slim.conv2d(net, 64, [3, 3], scope='conv3')
 
             reshaped_net = tf.reshape(net, shape=[tf.shape(self.inputs)[0], tf.shape(self.inputs)[1], np.prod(net.get_shape()[1:])])
 
@@ -115,8 +116,8 @@ class AC_Network():
 
             else:
 
-                hidden = slim.fully_connected(reshaped_net, self.shared_config["lstm_cell_units"], activation_fn=tf.nn.elu)
-                rnn_in = hidden
+                #hidden = slim.fully_connected(reshaped_net, self.shared_config["lstm_cell_units"], activation_fn=tf.nn.elu)
+                rnn_in = reshaped_net
 
         if "Dense" in shared_network_kind:
 

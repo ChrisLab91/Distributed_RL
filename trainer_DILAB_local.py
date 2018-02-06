@@ -114,18 +114,20 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Network configuration
         network_config = dict(shared=True,
-                              shared_config=dict(kind=["CNN", "RNN"],
+                              shared_config=dict(kind=["CNN"],
                                                  cnn_input_size=IMAGE_SIZE_PREPROCESSED,
-                                                 cnn_output_size=512,
+                                                 cnn_output_size=256,
                                                  dense_layers=[8],
                                                  lstm_cell_units=1024),
-                              policy_config=dict(layers=[512, ACTION_DIM],
+                              policy_config=dict(layers=[ACTION_DIM],
                                                  noise_dist=None),
-                              value_config=dict(layers=[512, 1],
+                              value_config=dict(layers=[1],
                                                 noise_dist=None))
 
+
+
         # Learning rate
-        LEARNING_RATE = 0.0001
+        LEARNING_RATE = 0.01
         UPDATE_LEARNING_RATE = True
         # Discount rate for advantage estimation and reward discounting
 
@@ -217,11 +219,8 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
             # If TRAIN_ON_COMPLETE_EP complete Episodes are used to update
             # A3C otherwise updates of size MINI_BATCH are performed
-            MINI_BATCH = 20
+            MINI_BATCH = 5
             TRAIN_ON_COMPLETE_EP = False
-
-            REWARD_FACTOR = 0.001
-            EPISODE_RUNS = 1000
 
             episode_count = 0
             total_steps = 0
