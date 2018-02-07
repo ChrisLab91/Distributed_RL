@@ -63,19 +63,19 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Gym environment
 
-        ENV_NAME = 'MsPacman-v0'  # MsPacman CartPole SpaceInvaders
+        ENV_NAME = 'SpaceInvaders-v0'  # MsPacman CartPole SpaceInvaders
         NUM_ENVS = 3
         PREPROCESSING = True
-        IMAGE_SIZE_PREPROCESSED = 35
+        IMAGE_SIZE_PREPROCESSED = 80
 
         PREPROCESSING_CONFIG = [
-            {
-                "type": "crop",
-                "leftpx": 0,
-                "rightpx": 168,
-                "uppx": 0,
-                "downpx": 160
-            },
+         #   {
+         #       "type": "crop",
+         #       "leftpx": 35,
+         #       "rightpx": 193,
+         #       "uppx": 0,
+         #       "downpx": 159
+         #   },
             {
                 "type": "image_resize",
                 "width": IMAGE_SIZE_PREPROCESSED,
@@ -128,7 +128,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
         # Learning rate
         LEARNING_RATE = 0.01
-        UPDATE_LEARNING_RATE = True
+        UPDATE_LEARNING_RATE = False
         # Discount rate for advantage estimation and reward discounting
 
         # Discount rate for advantage estimation and reward discounting
@@ -219,8 +219,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
 
             # If TRAIN_ON_COMPLETE_EP complete Episodes are used to update
             # A3C otherwise updates of size MINI_BATCH are performed
-            MINI_BATCH = 5
+            MINI_BATCH = 40
             TRAIN_ON_COMPLETE_EP = False
+            CLIPPING=False
 
             episode_count = 0
             total_steps = 0
@@ -348,9 +349,9 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         # Get episode information for tracking the training process
                         worker.episode_values.append(v)
                         worker.episode_reward.append(r)
-
                         # Clip advantages
-                        r = np.maximum(np.minimum(r, 1), -1)
+                        if CLIPPING:
+                            r = np.maximum(np.minimum(r, 1), -1)
                         worker.add_to_batch(s, r, a, v, terminal)
                         episode_step_count += 1
 
@@ -440,7 +441,7 @@ def main(job, task, worker_num, ps_num, initport, ps_hosts, worker_hosts):
                         # Set previous state for next step
                         s = s2
                         total_steps += 1
-                        episode_step_count += 1
+                        #episode_step_count += 1
 
                     episode_values = np.mean(np.sum(worker.episode_values, axis=0))
                     episode_reward = np.mean(np.sum(worker.episode_reward, axis=0))
