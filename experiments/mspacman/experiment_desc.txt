@@ -1,1 +1,0 @@
-using this model parameters https://github.com/dgriff777/rl_a3c_pytorch/blob/master/model.py
